@@ -41,7 +41,10 @@ on:
         type: string
         default: ''
       telemetry:
-        description: 'Which telemetry credential pair to compile in — production or development.'
+        description: >
+          Which telemetry credential pair to compile in — production or development — or none: a
+          build with no telemetry endpoint at all (a fork without the NJ_* variables). A `none`
+          build compiles telemetry out, sends nothing, and uploads no debug files to Sentry.
         type: string
         required: true
       artifact:
@@ -79,7 +82,9 @@ on:
         default: false
     secrets:
       SENTRY_AUTH_TOKEN:
-        required: true
+        # Required by every telemetry build (the upload step refuses without it); a `none` build
+        # never reads it.
+        required: false
     outputs:
       ipk:
         description: Path to the built .ipk inside the runner's workspace (pkg/*.ipk).
@@ -106,8 +111,8 @@ jobs:
             *) echo "::error::flavor must be stable, debug, or nightly, got '$FLAVOR'"; exit 1 ;;
           esac
           case "$TELEMETRY" in
-            production|development) ;;
-            *) echo "::error::telemetry must be production or development, got '$TELEMETRY'"; exit 1 ;;
+            production|development|none) ;;
+            *) echo "::error::telemetry must be production, development or none, got '$TELEMETRY'"; exit 1 ;;
           esac
           # The manifest filename and the Homebrew Channel listing are both keyed to the STABLE
           # app id — a manifest generated for a flavoured id would name a package the Channel does
@@ -257,6 +262,12 @@ jobs:
             echo "telemetry fingerprints (sha256, first 16):"
             printf '  sentry  %s\n' "$(printf %s "$NJ_SENTRY_DSN"  | sha256sum | cut -c1-16)"
             printf '  posthog %s\n' "$(printf %s "$NJ_POSTHOG_KEY" | sha256sum | cut -c1-16)"
+          elif [ "$TELEMETRY" = none ]; then
+            # No endpoint of either pair may reach the build, and the stamp must say so: a `none`
+            # build is the one that provably cannot report anything.
+            [ -z "$NJ_SENTRY_DSN$NJ_POSTHOG_KEY$NJ_SENTRY_DSN_DEV$NJ_POSTHOG_KEY_DEV" ]               || { echo '::error::telemetry credentials are present in a telemetry: none build.'; exit 1; }
+            # The stamp hashes the four values (Makefile TELEMETRY_CFG); all four empty is this hash.
+            grep -qF "tel:$(printf '%s|%s|%s|%s' '' '' '' '' | shasum | cut -c1-12)" pkg/.build-config               || { echo "::error::a telemetry: none build carries endpoints — pkg/.build-config says [$(cat pkg/.build-config)]"; exit 1; }
           else
             [ -n "$NJ_SENTRY_DSN_DEV" ] || { echo '::error::NJ_SENTRY_DSN_DEV is required for a development-telemetry build.'; exit 1; }
             [ -n "$NJ_POSTHOG_KEY_DEV" ] || { echo '::error::NJ_POSTHOG_KEY_DEV is required for a development-telemetry build.'; exit 1; }
@@ -281,6 +292,8 @@ jobs:
             || { echo "::error::packaged the wrong flavour — pkg/ holds $(ls pkg/*.ipk 2>&1)"; exit 1; }
 
       - name: Upload debug files to Sentry
+        # A `telemetry: none` build reports no crash, so it has nothing to symbolicate.
+        if: inputs.telemetry != 'none'
         # **In the same job as the build, deliberately.** `pkg/nativejelly.debug` is 75 MB and exists
         # only here; carrying it between jobs as an artifact would cost an upload and a download to
         # move a file whose only consumer is this step. It also keeps the pairing local: the binary
