@@ -717,7 +717,7 @@ fn drawn(family: &str, body: &str) -> Vec<(i32, i32, i32, i32, Vec<u8>)> {
         origin: super::Origin::Authored,
         content: Content::Script {
             bytes: format!(
-                "{}Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{{\an7\pos(10,10)}}{body}\n",
+                "{}Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{{\\an7\\pos(10,10)}}{body}\n",
                 HEADER.replace("Style: Default,Inter,24", &format!("Style: Default,{family},40"))
             )
             .into_bytes()
