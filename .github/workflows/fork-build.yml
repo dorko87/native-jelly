@@ -1,0 +1,130 @@
+name: Fork build
+
+# A FORK-ONLY workflow (not for upstream): builds an installable nightly-flavour .ipk of this branch
+# on a fork that has none of the NJ_* telemetry variables and no SENTRY_AUTH_TOKEN, and publishes it
+# as a prerelease of the fork. `telemetry: none` compiles telemetry out (build-package.yml asserts
+# no endpoint reached the binary), so the package reports nothing. No LAB=1, no devtriggers: this is
+# build-package.yml's own RELEASE=1 nightly build.
+#
+# Before the build, the host gates the touched code needs: ci.yml's default-feature unit suite and
+# python gates, and simulators.yml's native libass tests (`make check-ass`, macOS, the ignored
+# pixel tests included).
+
+on:
+  push:
+    branches: [fix/subtitle-script-faces]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-unit-default:
+    name: host unit tests (default features)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RUST_NIGHTLY: nightly
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/host-rust
+        with:
+          sdl: "true"
+      - name: make check-cargo-unit-default
+        run: make check-cargo-unit-default
+
+  host-python:
+    name: host python/shell/C gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: make check-python
+        run: make check-python
+
+  check-ass:
+    name: native libass tests (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install SDL
+        timeout-minutes: 15
+        run: brew install sdl2_ttf cmake pkg-config ffmpeg
+      - name: Install nightly Rust
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Tests against the bundled ASS renderer
+        run: make check-ass
+
+  plan:
+    name: date the build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      date: ${{ steps.date.outputs.date }}
+    steps:
+      - id: date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ARM build + gates
+    needs: [plan, host-unit-default, host-python, check-ass]
+    uses: ./.github/workflows/build-package.yml
+    with:
+      ref: ${{ github.sha }}
+      flavor: nightly
+      nightly-date: ${{ needs.plan.outputs.date }}
+      telemetry: none
+      artifact: fork-assets
+      # The package redistributes FFmpeg, so the LGPL corresponding source travels with it.
+      source-asset: true
+      fwcompat: true
+      caches: false
+      homebrew-manifest: false
+
+  publish:
+    name: publish fork prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [plan, build]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: fork-assets
+          path: raw
+      - name: Stage and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATE: ${{ needs.plan.outputs.date }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          src=$(ls raw/com.sostk.nativejelly.nightly_*_arm.ipk)
+          version=${src##*/com.sostk.nativejelly.nightly_}; version=${version%_arm.ipk}
+          tag="subtitle-faces-v${version}-nightly-${DATE}-${GITHUB_RUN_NUMBER}"
+          ipk="nativejelly-${tag}.ipk"
+          cp "$src" "dist/$ipk"
+          ( cd dist && sha256sum "$ipk" > "$ipk.sha256" )
+          cp raw/ffmpeg-*.tar.xz raw/build-ffmpeg.sh raw/nativejelly-source-*.tar.gz* dist/
+          gh release create "$tag" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Native Jelly $tag (fork build, no telemetry)" \
+            --prerelease \
+            --latest=false \
+            --notes "Fork build of $GITHUB_SHA: bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts). Nightly flavour (com.sostk.nativejelly.nightly), RELEASE=1, telemetry compiled out. sha256: $(cut -d' ' -f1 "dist/$ipk.sha256")"
+          {
+            echo "### $tag"
+            echo "- ipk: $ipk"
+            echo "- sha256: $(cut -d' ' -f1 "dist/$ipk.sha256")"
+          } >> "$GITHUB_STEP_SUMMARY"
