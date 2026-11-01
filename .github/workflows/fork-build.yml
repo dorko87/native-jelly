@@ -37,7 +37,14 @@ jobs:
         with:
           sdl: "true"
       - name: make check-cargo-unit-default
-        run: make check-cargo-unit-default
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-cargo-unit-default 2>&1 | tee "$RUNNER_TEMP/make.log" || {
+            # Job logs need a sign-in on a fork; annotations do not.
+            grep -E 'error(\[|:)|FAILED|panicked|failures:|^test .* FAILED|\*\*\*|No such file|not found' "$RUNNER_TEMP/make.log"               | tail -60 | sed 's/^/::error::/'
+            exit 1
+          }
 
   host-python:
     name: host python/shell/C gates
@@ -48,7 +55,14 @@ jobs:
         with:
           fetch-depth: 0
       - name: make check-python
-        run: make check-python
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-python 2>&1 | tee "$RUNNER_TEMP/make.log" || {
+            # Job logs need a sign-in on a fork; annotations do not.
+            grep -E 'error(\[|:)|FAILED|panicked|failures:|^test .* FAILED|\*\*\*|No such file|not found' "$RUNNER_TEMP/make.log"               | tail -60 | sed 's/^/::error::/'
+            exit 1
+          }
 
   check-ass:
     name: native libass tests (macOS)
@@ -62,7 +76,14 @@ jobs:
       - name: Install nightly Rust
         run: rustup toolchain install nightly --profile minimal --component rust-src
       - name: Tests against the bundled ASS renderer
-        run: make check-ass
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-ass 2>&1 | tee "$RUNNER_TEMP/make.log" || {
+            # Job logs need a sign-in on a fork; annotations do not.
+            grep -E 'error(\[|:)|FAILED|panicked|failures:|^test .* FAILED|\*\*\*|No such file|not found' "$RUNNER_TEMP/make.log"               | tail -60 | sed 's/^/::error::/'
+            exit 1
+          }
 
   plan:
     name: date the build
