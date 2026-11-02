@@ -12,7 +12,7 @@ name: Fork build
 
 on:
   push:
-    branches: [fix/subtitle-script-faces, ci/body-length-32bit]
+    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined]
   workflow_dispatch:
 
 permissions:
@@ -134,6 +134,7 @@ jobs:
           version=${src##*/com.sostk.nativejelly.nightly_}; version=${version%_arm.ipk}
           case "$GITHUB_REF_NAME" in
             ci/body-length-32bit) what="body-length"; about="a sized body over 4 GiB is not finished at its low 32 bits" ;;
+            ci/combined) what="combined"; about="body-length fix plus bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
             *) what="subtitle-faces"; about="bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
           esac
           tag="${what}-v${version}-nightly-${DATE}-${GITHUB_RUN_NUMBER}"
