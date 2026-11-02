@@ -113,7 +113,7 @@ jobs:
           set -euo pipefail
           v=$(sed -n 's/^VERSION=//p' ci/build-ffmpeg.sh)
           mkdir -p vendor/ffmpeg-build
-          curl -fsSL --retry 6 --retry-all-errors --retry-delay 15             "https://ffmpeg.org/releases/ffmpeg-$v.tar.xz" -o "vendor/ffmpeg-build/ffmpeg-$v.tar.xz"
+          curl -fsSL --max-time 300 --retry 6 --retry-all-errors --retry-delay 15             "https://ffmpeg.org/releases/ffmpeg-$v.tar.xz" -o "vendor/ffmpeg-build/ffmpeg-$v.tar.xz"
       # simulators.yml's replay: a new Settings row shifts the committed recordings' anchors.
       - name: Build native macOS simulator
         shell: bash
