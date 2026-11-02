@@ -206,7 +206,12 @@ jobs:
           NJ_SENTRY_DSN_DEV: ${{ inputs.telemetry == 'development' && vars.NJ_SENTRY_DSN_DEV || '' }}
           NJ_POSTHOG_KEY_DEV: ${{ inputs.telemetry == 'development' && vars.NJ_POSTHOG_KEY_DEV || '' }}
         run: |
-          make -j"$(nproc)"
+          # FORK-ONLY: fork job logs need a sign-in, annotations do not.
+          set -o pipefail
+          make -j"$(nproc)" 2>&1 | tee "$RUNNER_TEMP/make.log" || {
+            grep -E -A6 'error(\[|:)|\*\*\*|curl: \(' "$RUNNER_TEMP/make.log" | head -90 | sed 's/^/::error::/'
+            exit 1
+          }
           make ipk symbols
           # Prove the flags actually took, rather than trusting that they did: the Makefile records
           # the configuration it built, and a stale/ignored RELEASE= is exactly the silent failure
