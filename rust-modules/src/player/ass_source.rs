@@ -1,5 +1,6 @@
-//! Embedded ASS source ownership. The demuxer preserves headers, fonts and timed packets;
-//! the renderer receives immutable snapshots, never a pointer into FFmpeg's storage.
+//! Embedded ASS source ownership. The demuxer hands over headers, fonts and timed packets;
+//! headers and packets lose their trailing NUL terminators on the way in, and the renderer
+//! receives immutable snapshots, never a pointer into FFmpeg's storage.
 //! Selection does not discard read-ahead. A seek replaces each source identity so a completed
 //! render from the old position cannot land in the new playback epoch.
 use super::ass::{self, Content, Event, Font, Source};
@@ -17,6 +18,33 @@ const MAX_PACKET_BYTES: usize = 256 * 1024;
 const MAX_EVENTS: usize = 8192;
 const MAX_EVENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MEDIA_KEY_BYTES: usize = 64 * 1024;
+
+fn trim_terminators(mut bytes: &[u8]) -> &[u8] {
+    while bytes.last() == Some(&0) {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
+}
+
+/// Bound the header inventory by the RAW bytes FFmpeg handed over, as `begin_ass_sources` does,
+/// then trim trailing NULs. Trimming never admits a header the raw bounds refused, and a NUL
+/// inside stays for `ass::validate` to reject. Idempotent: `begin_with_text` normalizes before
+/// its reopen identity check, and `Store::begin` again for direct callers.
+fn normalize_headers(headers: Vec<(i32, Vec<u8>)>) -> Vec<(i32, Vec<u8>)> {
+    let mut raw_bytes = 0;
+    headers
+        .into_iter()
+        .take(MAX_TRACKS)
+        .filter_map(|(track, mut header)| {
+            if header.len() > MAX_HEADER_BYTES || raw_bytes + header.len() > MAX_HEADERS_BYTES {
+                return None;
+            }
+            raw_bytes += header.len();
+            header.truncate(trim_terminators(&header).len());
+            Some((track, header))
+        })
+        .collect()
+}
 
 #[derive(Default)]
 pub(crate) struct Store {
@@ -71,6 +99,7 @@ impl Store {
     }
 
     fn begin(&mut self, media_key: &str, headers: Vec<(i32, Vec<u8>)>, fonts: Vec<Font>) -> u64 {
+        let headers = normalize_headers(headers);
         let same_file = !media_key.is_empty()
             && self.media_key.as_deref() == Some(media_key)
             && headers.len() == self.tracks.len()
@@ -100,12 +129,7 @@ impl Store {
             .collect::<Vec<_>>()
             .into();
         self.fonts = Some(fonts.clone());
-        let mut header_bytes = 0;
-        for (track, header) in headers.into_iter().take(MAX_TRACKS) {
-            if header.len() > MAX_HEADER_BYTES || header_bytes + header.len() > MAX_HEADERS_BYTES {
-                continue;
-            }
-            header_bytes += header.len();
+        for (track, header) in headers {
             // An unchanged inventory also preserves the per-track/global byte budgets.
             // A demux reopen seeks to a video cue and may never resend a long sign.
             let events = previous.get(&track).and_then(|source| match &source.content {
@@ -224,6 +248,10 @@ pub(crate) fn push(generation: u64, track: i32, start_ns: i64, end_ns: i64, payl
     if payload.len() > MAX_PACKET_BYTES {
         return;
     }
+    let payload = trim_terminators(payload);
+    if payload.is_empty() || payload.contains(&0) {
+        return;
+    }
     store().push(
         generation,
         track,
@@ -294,6 +322,137 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn begin_keeps_empty_headers_but_bounds_raw_bytes_before_trimming() {
+        let mut s = Store::default();
+        s.begin(
+            "fixture",
+            vec![(0, vec![]), (1, vec![0; 3]), (2, vec![0; MAX_HEADER_BYTES + 1])],
+            vec![],
+        );
+        for track in [0, 1] {
+            let source = s.selected(track).unwrap();
+            let Content::Embedded { header, .. } = &source.content else {
+                panic!()
+            };
+            assert!(header.is_empty(), "validation must receive the empty header");
+        }
+        assert!(s.selected(2).is_none());
+    }
+
+    #[test]
+    fn the_inventory_budget_counts_raw_header_bytes_before_trimming() {
+        let mut s = Store::default();
+        let padded = |text: &[u8]| {
+            let mut header = text.to_vec();
+            header.resize(MAX_HEADER_BYTES, 0);
+            header
+        };
+        let headers: Vec<_> = (0..5).map(|t| (t, padded(b"header".as_slice()))).collect();
+        s.begin("fixture", headers, vec![]);
+        assert_eq!(
+            s.tracks.keys().copied().collect::<Vec<_>>(),
+            [0, 1, 2, 3],
+            "terminators count against MAX_HEADERS_BYTES as begin_ass_sources counts them"
+        );
+        let Content::Embedded { header, .. } = &s.tracks[&3].content else {
+            panic!()
+        };
+        assert_eq!(header.as_ref(), b"header");
+    }
+
+    #[test]
+    fn terminators_are_trimmed_from_headers_and_packets_but_a_zero_inside_is_not() {
+        let _guard = nj_base::testlock::serial();
+        super::super::SHARED.playpos_ns.store(0, std::sync::atomic::Ordering::Relaxed);
+        let generation = begin(
+            "fixture",
+            vec![
+                (0, b"[Script Info]\n\0\0".to_vec()),
+                (1, b"[Script Info]\0\n".to_vec()),
+                (2, vec![]),
+                (3, vec![0; 4]),
+            ],
+            vec![],
+        );
+        let caption = b"0,0,Default,,0,0,0,,hello";
+        let second = b"1,0,Default,,0,0,0,,again";
+        let terminated = [caption.as_slice(), b"\0\0"].concat();
+        let hidden_zero = b"2,0,Default,,0,0,0,,he\0llo";
+        for payload in [
+            terminated.as_slice(),
+            b"".as_slice(),
+            b"\0\0\0".as_slice(),
+            hidden_zero.as_slice(),
+            second.as_slice(),
+        ] {
+            push(generation, 0, 1_000_000_000, 3_000_000_000, payload);
+        }
+
+        let track = |n| selected(n).unwrap();
+        let source = track(0);
+        let Content::Embedded { header, events, .. } = &source.content else {
+            panic!()
+        };
+        assert_eq!(header.as_ref(), b"[Script Info]\n", "trailing zeros leave the header");
+        let payloads: Vec<&[u8]> = events.iter().map(|e| &*e.payload).collect();
+        assert_eq!(
+            payloads,
+            [caption.as_slice(), second.as_slice()],
+            "a terminated packet is kept without its zeros; empty, all-zero and \
+             inner-zero packets are dropped without costing the valid ones"
+        );
+        assert_eq!(ass::validate(&source), Ok(()));
+
+        let source = track(1);
+        let Content::Embedded { header, .. } = &source.content else {
+            panic!()
+        };
+        assert_eq!(header.as_ref(), b"[Script Info]\0\n", "a zero inside is not trimmed");
+        assert_eq!(ass::validate(&source), Err(ass::Fault::InvalidTrack));
+        for empty in [2, 3] {
+            let source = track(empty);
+            let Content::Embedded { header, .. } = &source.content else {
+                panic!()
+            };
+            assert!(header.is_empty());
+            assert_eq!(ass::validate(&source), Err(ass::Fault::InvalidTrack));
+        }
+
+        // `push` never lets an inner zero in, but a track built any other way still fails it.
+        let forged = Source {
+            id: ass::next_source_id(),
+            revision: 0,
+            origin: ass::Origin::Authored,
+            content: Content::Embedded {
+                header: Arc::from(&b"[Script Info]\n"[..]),
+                events: Arc::from([Event {
+                    start_ms: 0,
+                    duration_ms: 1000,
+                    payload: hidden_zero.as_slice().into(),
+                }]),
+                fonts: Arc::from([]),
+            },
+        };
+        assert_eq!(ass::validate(&forged), Err(ass::Fault::InvalidEvents));
+        reset();
+    }
+
+    #[test]
+    fn begin_normalizes_headers_before_reopen_identity_checks() {
+        let mut s = Store::default();
+        let generation = s.begin("fixture", vec![(0, b"header\0\0".to_vec())], vec![]);
+        s.push(generation, 0, event("caption", 1000), 0);
+        s.retain_for_reload();
+        s.begin("fixture", vec![(0, b"header".to_vec())], vec![]);
+        let source = s.selected(0).unwrap();
+        let Content::Embedded { header, events, .. } = &source.content else {
+            panic!()
+        };
+        assert_eq!(header.as_ref(), b"header");
+        assert_eq!(events.as_ref(), &[event("caption", 1000)]);
+    }
 
     #[test]
     fn resetting_another_playback_owner_cannot_retire_the_live_subtitles() {

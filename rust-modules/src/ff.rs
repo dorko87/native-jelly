@@ -1324,13 +1324,20 @@ unsafe fn begin_ass_sources(
             continue;
         }
         let len = (*cp).extradata_size.max(0) as usize;
-        if len > 0 && len <= ass_source::MAX_HEADER_BYTES
-            && headers.len() < ass_source::MAX_TRACKS
-            && header_bytes + len <= ass_source::MAX_HEADERS_BYTES
-            && !(*cp).extradata.is_null() {
-            header_bytes += len;
-            headers.push((track as i32, std::slice::from_raw_parts((*cp).extradata, len).to_vec()));
+        // Bounds use the raw length, before `ass_source` trims trailing NULs. A missing header
+        // still makes a track, so selecting it reports an invalid track rather than nothing.
+        if len > ass_source::MAX_HEADER_BYTES
+            || headers.len() >= ass_source::MAX_TRACKS
+            || header_bytes + len > ass_source::MAX_HEADERS_BYTES {
+            continue;
         }
+        let header: &[u8] = if len == 0 || (*cp).extradata.is_null() {
+            &[]
+        } else {
+            std::slice::from_raw_parts((*cp).extradata, len)
+        };
+        header_bytes += header.len();
+        headers.push((track as i32, header.to_vec()));
     }
     let mut fonts = Vec::new();
     let mut font_bytes = 0;

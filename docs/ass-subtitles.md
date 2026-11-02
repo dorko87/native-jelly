@@ -34,6 +34,13 @@ traditional Mongolian (`mn`, whose Cyrillic form is Inter's). U+2060 is not carr
 libass skips the default-ignorables (U+200B-200F, U+2060-206F) before it looks a glyph up.
 
 The demuxer copies ASS headers, complete timed packets and font attachments out of FFmpeg.
+The source store removes trailing zero terminators from headers and packets. A zero byte
+inside a header makes the track invalid. The raw byte limits apply before trimming, including
+the per-file track and header-inventory budgets.
+An empty normalized header or a missing header reports an invalid track. The source store drops
+empty normalized packets and packets with an internal zero byte. These packets cannot prevent
+valid captions on the same track from rendering. External ASS files retain their existing
+validation rules.
 `Shared` owns the ASS source store and renderer mailbox alongside the other playback transport
 state. `player::ass_source` retains immutable snapshots and a bounded event window, including the
 history needed for subtitle delay. It keeps all embedded ASS tracks so selecting another language
@@ -112,6 +119,7 @@ build to reach that mock server):
 
 ```sh
 make check
+make check-ffmpeg
 make check-ass
 CARGO_INCREMENTAL=0 cargo +nightly check --manifest-path rust-modules/Cargo.toml \
   --lib --no-default-features
@@ -123,6 +131,10 @@ python3 tests/mock_pms.py --host 0.0.0.0 --port "$MOCK_PMS_PORT" \
 
 The native host test checks actual libass pixels; ordinary host tests check source preservation,
 selection/seek fencing, overlap, bounds and download policy. Neither proves TV performance.
+`make check-ffmpeg` also builds the native ASS renderer and feeds terminated headers and packets
+from the bundled demuxer through the subtitle ingestion path, checking caption pixels and timing.
+`tests/fixtures/make_ass_header_fixture.py` regenerates their synthetic MKV from the captured
+header and generated captions. Its second subtitle track has no terminators and is the control.
 Boot the fixture with `tools/tv-session.sh up --guest --mock --screen player=990001`.
 `--mock` verifies the configured server’s synthetic identity and supplies a fabricated guest token;
 it never resolves a real Plex account. Configure and build the developer app against that mock first.

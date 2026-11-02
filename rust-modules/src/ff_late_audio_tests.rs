@@ -388,6 +388,7 @@ struct Prepared {
     video_before: u64,
     _server: FileServer,
     _scratch: Scratch,
+    _ffmpeg: super::image_subtitle_tests::HostFfmpeg,
 }
 
 /// Build the fixture, prove its shape, serve it and start demuxing it. `None` when the tools are
@@ -405,8 +406,7 @@ fn prepare_with(tag: &str, make: impl FnOnce(&Path) -> PathBuf) -> Option<Prepar
         eprintln!("SKIP {tag}: the ffmpeg / ffprobe command line tools are not installed");
         return None;
     }
-    bind_host_ffmpeg();
-    super::ABI_OK.store(true, Ordering::Relaxed);
+    let ffmpeg = bind_host_ffmpeg();
     SHARED.seek_to_ns.store(-1, Ordering::Relaxed);
     SHARED.desired_audio_idx.store(-1, Ordering::Relaxed);
     SHARED.dg_load_v.store(0, Ordering::Relaxed);
@@ -422,7 +422,7 @@ fn prepare_with(tag: &str, make: impl FnOnce(&Path) -> PathBuf) -> Option<Prepar
     );
     let server = FileServer::start(&file);
     let run = DemuxRun::start(server.port);
-    Some(Prepared { run, first_audio_s, video_before, _server: server, _scratch: scratch })
+    Some(Prepared { run, first_audio_s, video_before, _server: server, _scratch: scratch, _ffmpeg: ffmpeg })
 }
 
 /// [`prepare`], then report what reached the audio lane within the deadline.
@@ -1112,8 +1112,7 @@ fn opus_raw_packets_and_mismatched_layout_refusal() {
         eprintln!("SKIP Opus demux: ffmpeg CLI unavailable");
         return;
     }
-    bind_host_ffmpeg();
-    super::ABI_OK.store(true, Ordering::Relaxed);
+    let _ffmpeg = bind_host_ffmpeg();
     let scratch = Scratch::new("opus-feed");
     for (codec, channels, declared, accepted) in [
         ("libopus", 1, 1, true),

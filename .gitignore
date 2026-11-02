@@ -167,6 +167,8 @@ tests/fixtures/fixtures.json
 !tests/fixtures/mkv_zlib_subs.mkv
 # 588-byte legacy subtitle packet regression (no audio/video).
 !tests/fixtures/gbk-subrip.mkv
+# NUL-terminated embedded ASS header and packets (`make_ass_header_fixture.py`), 7 KB.
+!tests/fixtures/ass-terminated-header.mkv
 
 # Python bytecode from the host-side test/tooling scripts.
 __pycache__/

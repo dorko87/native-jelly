@@ -1481,6 +1481,8 @@ build-bench build-bench-quick:
 check-python: check-localization
 	python3 ci/test_ass_composite.py
 	python3 ci/test_ass_regions.py
+	@# The ASS header fixture generator's Matroska parsing and validation, on synthetic input (no ffmpeg run).
+	python3 ci/test_ass_header_fixture.py
 	@# The flavour transform, host-side and free. Its central assertion — that the STABLE transform
 	@# is the identity — is the mechanical guarantee that having a second app id cannot perturb the
 	@# released .ipk, whose sha256 every user's television verifies at install. That property is
@@ -1995,8 +1997,9 @@ $(FFMPEG_HOST_STAGED): pkg/%.dylib: $(FFMPEG_HOST_INC)/libavformat/avformat.h ci
 # which decoders) is invisible to it. These tests load the host build of that same list and are
 # `#[ignore]`d in the plain suite; the first is the zlib-compressed PGS track that no configure
 # flag change may silently drop again (`ff_image_subtitle_tests.rs`). macOS only, like the staging.
-check-ffmpeg: $(FFMPEG_HOST_STAGED)
-	cd rust-modules && CARGO_INCREMENTAL=0 NJ_FFMPEG_DIR=$(CURDIR)/pkg PATH="$$HOME/.cargo/bin:$$PATH" \
+# The ASS reader tests also need staged libass and fonts to compare caption pixels after ingestion.
+check-ffmpeg: $(FFMPEG_HOST_STAGED) $(LIBASS_HOST_STAGED)
+	cd rust-modules && CARGO_INCREMENTAL=0 NJ_FFMPEG_DIR=$(CURDIR)/pkg NJ_APP_DIR="$(CURDIR)/pkg" PATH="$$HOME/.cargo/bin:$$PATH" \
 	  cargo +$(RUST_NIGHTLY) test --lib ff::image_subtitle_tests -- --ignored
 	cd rust-modules && CARGO_INCREMENTAL=0 NJ_FFMPEG_DIR=$(CURDIR)/pkg PATH="$$HOME/.cargo/bin:$$PATH" \
 	  cargo +$(RUST_NIGHTLY) test --lib ff::late_audio_tests -- --ignored
