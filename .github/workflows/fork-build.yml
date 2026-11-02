@@ -12,7 +12,7 @@ name: Fork build
 
 on:
   push:
-    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined, ci/foreground-reclaim]
+    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined, ci/foreground-reclaim, ci/subtitle-fixes]
   workflow_dispatch:
 
 permissions:
@@ -90,16 +90,42 @@ jobs:
           }
 
   check-ass:
-    name: native libass tests (macOS)
+    name: macOS replay, FFmpeg and libass tests
     runs-on: macos-latest
-    timeout-minutes: 50
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install SDL
         timeout-minutes: 15
         run: brew install sdl2_ttf cmake pkg-config ffmpeg
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            vendor/ffmpeg-prefix-host
+            vendor/ffmpeg-build
+          key: host-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ci/build-ffmpeg.sh') }}
+      # simulators.yml's replay: a new Settings row shifts the committed recordings' anchors.
+      - name: Build native macOS simulator
+        run: make sim-macos SIM_TDIR=rust-modules/target-sim-ci
+      - name: Replay all committed product recordings
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/replay_fixtures.py             --sim "$GITHUB_WORKSPACE/rust-modules/target-sim-ci/debug/nativejelly-sim"             --output "$RUNNER_TEMP/nativejelly-replay" 2>&1 | tee "$RUNNER_TEMP/replay.log" || {
+            tail -60 "$RUNNER_TEMP/replay.log" | sed 's/^/::error::/'
+            exit 1
+          }
       - name: Install nightly Rust
         run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Tests against the bundled FFmpeg
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-ffmpeg 2>&1 | tee "$RUNNER_TEMP/make.log" || {
+            # Job logs need a sign-in on a fork; annotations do not.
+            grep -E 'error(\[|:)|FAILED|panicked|failures:|^test .* FAILED|\*\*\*|No such file|not found' "$RUNNER_TEMP/make.log" | tail -60 | sed 's/^/::error::/'
+            exit 1
+          }
       - name: Tests against the bundled ASS renderer
         shell: bash
         run: |
@@ -160,6 +186,7 @@ jobs:
           case "$GITHUB_REF_NAME" in
             ci/body-length-32bit) what="body-length"; about="a sized body over 4 GiB is not finished at its low 32 bits" ;;
             ci/foreground-reclaim) what="foreground-reclaim"; about="ci/combined plus reclaim of a parked session after a decoder release or a refused foreground Load" ;;
+            ci/subtitle-fixes) what="subtitle-fixes"; about="ci/foreground-reclaim plus five PlxNative subtitle fixes (HDR dimming, Huge size, caption rise, retry keeps subtitles, NUL-terminated ASS)" ;;
             ci/combined) what="combined"; about="body-length fix plus bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
             *) what="subtitle-faces"; about="bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
           esac
