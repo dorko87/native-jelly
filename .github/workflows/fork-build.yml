@@ -106,7 +106,15 @@ jobs:
           key: host-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ci/build-ffmpeg.sh') }}
       # simulators.yml's replay: a new Settings row shifts the committed recordings' anchors.
       - name: Build native macOS simulator
-        run: make sim-macos SIM_TDIR=rust-modules/target-sim-ci
+        shell: bash
+        run: |
+          set -o pipefail
+          make sim-macos SIM_TDIR=rust-modules/target-sim-ci 2>&1 | tee "$RUNNER_TEMP/sim.log" || {
+            # Job logs need a sign-in on a fork; annotations do not.
+            grep -E -B2 -A8 'error(\[|:)|\*\*\*|No such file|not found|command not found' "$RUNNER_TEMP/sim.log" | head -80 | sed 's/^/::error::/'
+            tail -25 "$RUNNER_TEMP/sim.log" | sed 's/^/::error::tail: /'
+            exit 1
+          }
       - name: Replay all committed product recordings
         shell: bash
         run: |
