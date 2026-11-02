@@ -91,7 +91,8 @@ jobs:
 
   check-ass:
     name: macOS replay, FFmpeg and libass tests
-    runs-on: macos-latest
+    # Intel: the arm64 (macos-latest) queue left this job unacquired three runs in a row.
+    runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
