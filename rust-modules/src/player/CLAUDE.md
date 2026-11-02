@@ -132,6 +132,20 @@ something.
   grades both (`load_max`, `sink_echo`). **Also since 2026-09-03: a `type=18` before any picture
   publishes `load_failed`** (`sf_on_event_inner`), so an asynchronous refusal reaches the failure
   read-out instead of parking the player in Connecting on a black screen (lab report §3.5).
+  **After a picture, one number acts too (ported from PlxNative #756/#834): `type=18 num=600`,
+  "VDEC resource is released by policy action".** A paused direct play left until the screensaver
+  came on got it with no `LIFECYCLE: background`, and the dead pipeline refused every Play after
+  it. It raises `decoder_revoked`; the app loop parks the session exactly as an app switch does
+  (`run::park_on_decoder_release`) and the viewer's next key or click is spent on the foreground
+  claim that rebuilds it at the saved spot. The claiming press chooses the clock
+  (`run::wake_input`, whose doc is the table): PLAY, and a play/pause TOGGLE (PLAYPAUSE, or a
+  pointer click on no control) over a save that was Paused, claim with `ForegroundInput::PlayKey`
+  and come back Playing at the exact saved offset; every other press, OK and PAUSE included,
+  claims with `DidForeground` and keeps the saved clock. A Playing restore of a Paused save clears
+  the standing pause BEFORE the Load (`PlayerForegroundActuator::before_load` →
+  `lifecycle::commit_viewer_resume_for_load`, only with no live Engine), so the Load's first Play
+  is not fenced behind the viewer's hold. Every other `type=18` after a picture is still only
+  logged.
   **And the frame rate IS a discriminator, measured on the dev set the same day:** a 4K H.264 24p
   direct play declared at 60 makes the pipeline announce `frameRate:24` and then `:30` for the same
   stream (a 24p picture on a 30 fps lattice — the judder the maintainer saw on the Auto 4K rung);
@@ -272,7 +286,11 @@ something.
   the `docs/agent-reference.md` gotchas): OS
   background suspends the buffer-feed preserving the session. Foreground tracks one exact Load
   attempt at a time, follows reducer-approved superseding or rollback attempts, retries an exact
-  failure without repeating route preparation, and applies the saved clock only after `Started`.
+  failure without repeating route preparation, and issues the clock's native Play only after
+  `Started` (a Playing restore over a standing pause publishes the viewer's resume BEFORE the
+  Load, `before_load`, so the Load is not armed under it). A foreground Load refused because the
+  DID edge had just withdrawn the plaintext grants is claimed again when the grant revision moves
+  (`run::retry_refused_foreground`, at most `FOREGROUND_RETRIES`).
   Preserve the suspend/reload pairing if you touch playback.
 
 ## Verifying playback changes
