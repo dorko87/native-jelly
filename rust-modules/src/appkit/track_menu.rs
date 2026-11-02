@@ -1796,6 +1796,7 @@ pub(crate) fn subtitle_size_label(size: SubtitleSize) -> &'static str {
         SubtitleSize::Medium => msg::settings_playback_subtitle_size_medium(),
         SubtitleSize::Large => msg::settings_playback_subtitle_size_large(),
         SubtitleSize::ExtraLarge => msg::settings_playback_subtitle_size_extra_large(),
+        SubtitleSize::Huge => msg::settings_playback_subtitle_size_huge(),
     }
 }
 

@@ -1274,15 +1274,21 @@ pub(crate) enum SubtitleSize {
     Large,
     #[serde(rename = "extra_large")]
     ExtraLarge,
+    /// Added on top of the ladder rather than by moving the other rungs up, so no saved pick
+    /// changes size. A build from before it reads `"huge"` as a spelling it does not know, which
+    /// `de_soft_subtitle_size` degrades to `Medium`, never a failed load.
+    #[serde(rename = "huge")]
+    Huge,
 }
 
 impl SubtitleSize {
     /// Every rung, smallest first — the order the picker lists them in.
-    pub(crate) const LADDER: [SubtitleSize; 4] = [
+    pub(crate) const LADDER: [SubtitleSize; 5] = [
         SubtitleSize::Small,
         SubtitleSize::Medium,
         SubtitleSize::Large,
         SubtitleSize::ExtraLarge,
+        SubtitleSize::Huge,
     ];
 
     /// An in-memory index back to a rung — out of range is `Medium`, never a neighbouring rung,
