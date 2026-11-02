@@ -4,10 +4,12 @@
 //! route::title_cptr/ctxline_cptr. The video-overlay subtitle draws below stay on the raw text/tex
 //! primitives (they composite directly over the video plane, outside the transport HUD).
 #![allow(dead_code)]
+pub(crate) mod caption_rise;
 mod seek_jump;
 pub(crate) use seek_jump::SeekBurst;
 
 use nj_gfx::gfx::{delete_tex, upload_rgba};
+use crate::player::text_style::HudBand;
 use crate::ui::consts::{SCR_H, SCR_W};
 use crate::ui::theme;
 use crate::ui::widgets::{
@@ -140,20 +142,21 @@ fn wrap(s: &str, max: usize) -> Vec<String> {
 ///
 /// Subtitle download notices use the HUD's ordinary text layout. Media captions
 /// themselves are rendered by the shared libass worker (or the image decoder).
-pub(crate) fn draw_subtitles(hud_up: bool, suppressed: bool) {
+pub(crate) fn draw_subtitles(hud_up: bool, suppressed: bool, band: HudBand) {
     let cue = crate::player::sidecar::active(0, suppressed);
     let text = match cue {
         Some(t) if !t.trim().is_empty() => t,
         _ => return,
     };
-    draw_subtitle_message(&text, hud_up);
+    draw_subtitle_message(&text, hud_up, band);
 }
 
 /// Caption placement for a download or native-renderer failure message. Text size and
 /// vertical placement follow the viewer's Settings > Playback picks (`route::subtitle_size`,
 /// `route::subtitle_position`) — native ASS/SSA keeps its authored style instead
-/// (`docs/ass-subtitles.md`).
-pub(crate) fn draw_subtitle_message(text: &str, hud_up: bool) {
+/// (`docs/ass-subtitles.md`). `band` is the transport's, carrying the rise an open section asks
+/// ([`caption_baseline`]).
+pub(crate) fn draw_subtitle_message(text: &str, hud_up: bool, band: HudBand) {
     let scale = subtitle_size_scale(crate::route::subtitle_size());
     let max_chars = ((42.0 / scale).round() as usize).max(20);
     let mut lines: Vec<String> = Vec::new();
@@ -176,10 +179,7 @@ pub(crate) fn draw_subtitle_message(text: &str, hud_up: bool) {
     let lh = CAPTION_LINE_PITCH * scale;
     let n = lines.len() as f32;
     let cx = SCR_W * 0.5;
-    // sit near the bottom normally; lift above the scrubber/tabs while the HUD is up; the viewer's
-    // Position pick lifts it further still, same direction, on top of that
-    let baseline = (if hud_up { SUB_CEIL_Y } else { SUB_BASE_Y })
-        - subtitle_position_lift(crate::route::subtitle_position());
+    let baseline = caption_baseline(crate::route::subtitle_position(), hud_up, band, n * lh);
     let block_top = baseline - n * lh;
     let ink = subtitle_ink(); // white unless the viewer picked a dimmer tone (track menu)
     let outline = theme::scrim_black(0.85);
@@ -194,6 +194,23 @@ pub(crate) fn draw_subtitle_message(text: &str, hud_up: bool) {
             p.text(cs.as_ptr(), cx, top + 4.0, sz, ink, 1, 1);
         }
     }
+}
+
+/// The y a caption block `block_h` px tall stands its bottom on: sit near the bottom normally; lift
+/// above the scrubber/tabs while the HUD is up; the viewer's Position pick lifts it further still,
+/// same direction, on top of that. While a section is open the block also rises by the band's
+/// `rise` for the Position (clear of the section; [`HudBand`]), and that rise stops where the
+/// block's top would cross the safe area ([`HudBand::clear_rise`]), the block then overlapping the
+/// section (captions draw above sections) at its own size. With no section open the rise is zero
+/// and the number is what it always was.
+fn caption_baseline(
+    position: crate::catalog::session::SubtitlePosition,
+    hud_up: bool,
+    band: HudBand,
+    block_h: f32,
+) -> f32 {
+    let rise = if hud_up { HudBand::clear_rise(band.rise_for(position), band.rest_limit(position), block_h) } else { 0.0 };
+    (if hud_up { band.ceil_y } else { SUB_BASE_Y }) - subtitle_position_lift(position) - rise
 }
 
 /// The ink both subtitle draws use this frame: the viewer's tone ([`crate::player::subtitle_tone`])
@@ -274,24 +291,38 @@ fn sub_screen_rect(r: (i32, i32, i32, i32), cw: i32, ch: i32) -> Rect {
 /// while leaving the dialogue still behind the scrim. Measuring the group and moving it as ONE
 /// unit is also why this is not a per-rect lift: two-line dialogue is two rects with different
 /// overhangs, and lifting each by its own would collapse them onto each other.
-fn hud_lift<I: Iterator<Item = Rect>>(rects: I, hud_up: bool) -> f32 {
+///
+/// While a section is open the limit the rects must clear is the ceiling less the band's rise
+/// ([`image_rise`]), held off the safe area by [`HudBand::clear_rise`] for the overhanging group's
+/// own height.
+fn hud_lift<I: Iterator<Item = Rect>>(rects: I, hud_up: bool, band: HudBand) -> f32 {
     if !hud_up {
         return 0.0;
     }
     let (mut top, mut bottom) = (f32::MAX, f32::MIN);
-    for r in rects.filter(|r| overhangs(*r)) {
+    for r in rects.filter(|r| overhangs(*r, band)) {
         top = top.min(r.y);
         bottom = bottom.max(r.y + r.h);
     }
     if top > bottom {
         return 0.0; // nothing overhangs
     }
-    (bottom - SUB_CEIL_Y).max(0.0).min(top.max(0.0))
+    // an image caption has no Position: its limit is the band's ceiling, raised by the section's rise
+    // (Low's is that one) unless the group's own top would then cross the safe area
+    let rise = HudBand::clear_rise(image_rise(band), band.ceil_y, bottom - top);
+    (bottom - (band.ceil_y - rise)).max(0.0).min(top.max(0.0))
 }
 
-/// Does this rect reach below the transport ceiling? Only such rects take the lift.
-fn overhangs(r: Rect) -> bool {
-    r.y + r.h > SUB_CEIL_Y
+/// The rise of the limit an image caption stands under: the band's ceiling is the Low Position's,
+/// so it is Low's rise.
+fn image_rise(band: HudBand) -> f32 {
+    band.rise_for(crate::catalog::session::SubtitlePosition::Low)
+}
+
+/// Does this rect reach below the band's limit (its ceiling, less the section's rise)? Only such
+/// rects take the lift.
+fn overhangs(r: Rect, band: HudBand) -> bool {
+    r.y + r.h > band.ceil_y - image_rise(band)
 }
 
 /// Client-rendered IMAGE subtitles (PGS/VobSub): composite the active decoded display set over
@@ -302,8 +333,8 @@ fn overhangs(r: Rect) -> bool {
 /// seconds); the cached rects are the unlifted screen rects, so the lift can follow the HUD
 /// frame by frame without re-uploading. Main-thread only (GL). This is the image counterpart to
 /// draw_subtitles — a selected track is either text or image, so at most one of the two draws a
-/// cue at a time.
-pub(crate) fn draw_subtitle_bitmap(cache: &mut SubtitleBitmaps, hud_up: bool) {
+/// cue at a time. `band` is the transport's, carrying the rise an open section asks.
+pub(crate) fn draw_subtitle_bitmap(cache: &mut SubtitleBitmaps, hud_up: bool, band: HudBand) {
     let set = &mut cache.set;
     let sel = crate::player::desired_sub_idx();
     if sel < 0 {
@@ -349,13 +380,13 @@ pub(crate) fn draw_subtitle_bitmap(cache: &mut SubtitleBitmaps, hud_up: bool) {
                 cache.key = k;
                 cache.sel = sel;
             }
-            let lift = hud_lift(set.iter().map(|(_, r)| *r), hud_up);
+            let lift = hud_lift(set.iter().map(|(_, r)| *r), hud_up, band);
             // the tone TINTS a bitmap: the image shader multiplies by it, so a PGS cue keeps its
             // authored colours and outline and only gives up light (white is the identity)
             let tint = subtitle_ink();
             let p = Painter::root();
             for (tex, r) in set.iter() {
-                let dy = if overhangs(*r) { lift } else { 0.0 };
+                let dy = if overhangs(*r, band) { lift } else { 0.0 };
                 p.tex(*tex, Rect::new(r.x, r.y - dy, r.w, r.h), 0.0, tint);
             }
         }
@@ -2478,26 +2509,27 @@ mod tests {
     fn image_sub_lifts_only_over_the_transport() {
         let dialogue = Rect::new(300.0, 900.0, 1320.0, 135.0); // bottom 1035, overhangs
                                                                // transport down: nothing moves, ever
-        assert_eq!(hud_lift([dialogue].into_iter(), false), 0.0);
+        assert_eq!(hud_lift([dialogue].into_iter(), false, HudBand::CLASSIC), 0.0);
         // transport up: a bottom-anchored cue rises exactly its overhang, landing ON the ceiling
-        let lift = hud_lift([dialogue].into_iter(), true);
+        let lift = hud_lift([dialogue].into_iter(), true, HudBand::CLASSIC);
         assert!(
             close(1035.0 - lift, SUB_CEIL_Y),
             "lifted bottom should sit at the ceiling"
         );
         // a sign at the top of frame already clears it and must stay put
         let sign = Rect::new(100.0, 100.0, 200.0, 100.0);
-        assert_eq!(hud_lift([sign].into_iter(), true), 0.0);
-        assert!(!overhangs(sign) && overhangs(dialogue));
+        assert_eq!(hud_lift([sign].into_iter(), true, HudBand::CLASSIC), 0.0);
+        assert!(!overhangs(sign, HudBand::CLASSIC) && overhangs(dialogue, HudBand::CLASSIC));
         // a set too tall to lift is clamped instead of being pushed off the top of the screen
         assert_eq!(
-            hud_lift([Rect::new(0.0, 0.0, 1920.0, SCR_H)].into_iter(), true),
+            hud_lift([Rect::new(0.0, 0.0, 1920.0, SCR_H)].into_iter(), true, HudBand::CLASSIC),
             0.0
         );
         assert_eq!(
             hud_lift(
                 [Rect::new(0.0, 50.0, 1920.0, SCR_H - 50.0)].into_iter(),
-                true
+                true,
+                HudBand::CLASSIC
             ),
             50.0
         );
@@ -2511,7 +2543,7 @@ mod tests {
     fn image_sub_lift_spans_only_the_rects_that_overhang() {
         let sign = Rect::new(100.0, 100.0, 200.0, 100.0);
         let dialogue = Rect::new(300.0, 900.0, 1320.0, 135.0);
-        let lift = hud_lift([sign, dialogue].into_iter(), true);
+        let lift = hud_lift([sign, dialogue].into_iter(), true, HudBand::CLASSIC);
         assert!(
             close(lift, 1035.0 - SUB_CEIL_Y),
             "the sign's top must not clamp the lift"
@@ -2520,17 +2552,17 @@ mod tests {
             close(dialogue.y + dialogue.h - lift, SUB_CEIL_Y),
             "dialogue clears the transport"
         );
-        assert!(!overhangs(sign), "and the sign is not shifted at all");
+        assert!(!overhangs(sign, HudBand::CLASSIC), "and the sign is not shifted at all");
 
         // two-line dialogue: different overhangs, ONE shift, so the gap between them survives
         let l1 = Rect::new(300.0, 900.0, 1320.0, 50.0); // bottom 950
         let l2 = Rect::new(300.0, 960.0, 1320.0, 50.0); // bottom 1010
-        let two = hud_lift([l1, l2].into_iter(), true);
+        let two = hud_lift([l1, l2].into_iter(), true, HudBand::CLASSIC);
         assert!(
             close(two, 1010.0 - SUB_CEIL_Y),
             "measured over the group, not per rect"
         );
-        assert!(overhangs(l1) && overhangs(l2), "both take the same shift");
+        assert!(overhangs(l1, HudBand::CLASSIC) && overhangs(l2, HudBand::CLASSIC), "both take the same shift");
         assert!(
             close((l2.y - two) - (l1.y + l1.h - two), 10.0),
             "their 10px gap is preserved"

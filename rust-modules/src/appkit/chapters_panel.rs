@@ -219,6 +219,12 @@ fn card_rect(i: usize, scroll: f32) -> Rect {
     Rect::new(MARGIN_X + i as f32 * (CH_W + CH_GAP) - scroll, CH_TOP, CH_W, CH_H)
 }
 
+/// The resting top edge of the strip (`CH_TOP`, 684): what an open Chapters strip covers from,
+/// which the captions rise clear of (`player_hud::caption_rise`).
+pub(crate) fn block_top() -> f32 {
+    CH_TOP
+}
+
 /// The strip's own clip — every card's stop is bounded to it, matching the cull test
 /// [`ChaptersState::draw`] runs per card (`crate::ui::on_axis`).
 fn strip_extent() -> Rect {

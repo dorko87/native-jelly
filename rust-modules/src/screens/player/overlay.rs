@@ -188,6 +188,18 @@ impl OverlayKind {
     pub(crate) fn swallows_transport(self) -> bool {
         matches!(self, OverlayKind::More { .. })
     }
+
+    /// **Is this panel a player SECTION, which the captions rise clear of?** Its bit in the open set
+    /// and the resting top edge of what it lays out (`appkit::player_hud::caption_rise`): the Info
+    /// card and the Chapters strip sit over the caption's band. The menus are popovers rather than
+    /// sections, and the capsule hides the transport and the lift with it.
+    pub(crate) fn caption_section(self) -> Option<(u8, f32)> {
+        match self {
+            OverlayKind::Info => Some((1, crate::appkit::info_panel::block_top())),
+            OverlayKind::Chapters => Some((2, crate::appkit::chapters_panel::block_top())),
+            OverlayKind::Tracks { .. } | OverlayKind::More { .. } | OverlayKind::Timing => None,
+        }
+    }
 }
 
 /// What the container is asked to present. The `host` is the player instance the panel reports back

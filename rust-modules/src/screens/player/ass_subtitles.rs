@@ -79,7 +79,11 @@ impl AssSubtitles {
         self.frame.as_ref().map_or(0, |f| f.serial)
     }
 
-    pub(crate) fn draw(&mut self, lift: bool) {
+    /// `lift` is the transport being up (or a panel read over it), and `band` the transport's: a
+    /// bottom region moves by the band's `lift` plus the `rise` an open section asks, zero with none
+    /// (see `lift_dys`). It moves a text subtitle's bottom regions and nothing else: an authored
+    /// script keeps its own placement.
+    pub(crate) fn draw(&mut self, lift: bool, band: text_style::HudBand) {
         let Some(frame) = &self.frame else {
             if self.source == 0 {
                 clear_textures(&mut self.textures);
@@ -127,7 +131,7 @@ impl AssSubtitles {
         }
         self.spans.clear();
         self.spans.extend(frame.rects.iter().map(|r| (r.y,r.height)));
-        lift_dys(frame.origin, lift, &self.spans, frame.aligns, &mut self.dys);
+        lift_dys(frame.origin, lift, band, &self.spans, frame.aligns, &mut self.dys);
         let ink = crate::appkit::player_hud::subtitle_ink();
         for ((texture, rect), dy) in self.textures.iter().zip(&frame.rects).zip(&self.dys) {
             Painter::root().tex(
@@ -164,9 +168,17 @@ impl AssSubtitles {
     }
 }
 
+/// How far (vertical px, negative is up) each region of a Text-origin frame moves while the
+/// transport is up (`lift`); an authored frame never moves. `regions` are `(y, height)` in frame
+/// pixels. Every active cue bottom-aligned: all regions move; mixed: the regions at the bottom
+/// anchor move unless one of them is a merged top+bottom region. The moving group rises by the
+/// band's fixed `lift` and by the `rise` that clears an open section (zero with none), the latter
+/// clamped by the safe area (`HudBand::clear_rise`); the whole is clamped once so the group's top
+/// stays on the screen.
 fn lift_dys(
     origin: ass::Origin,
     lift: bool,
+    band: text_style::HudBand,
     regions: &[(i32, i32)],
     aligns: text_ass::AlignSet,
     dys: &mut Vec<f32>,
@@ -210,10 +222,21 @@ fn lift_dys(
         dys.fill(-1.0);
     }
     let Some(top) = moving_top(regions, dys) else { return };
-    let lift = text_style::HUD_LIFT.min(top.max(0) as f32);
+    // the moving group rises by the band's fixed lift and, while a section is open, by the rise that
+    // clears it, unless the group's own top would then cross the safe area (it overlaps the section
+    // instead, at its own size). The one shared delta is the same for every region that moves.
+    let position = style.position;
+    let height = (moving_bottom(regions, dys).unwrap_or(top) - top) as f32;
+    let rise = text_style::HudBand::clear_rise(band.rise_for(position), band.rest_limit(position), height);
+    let lift = (band.lift + rise).min(top.max(0) as f32);
     for dy in dys.iter_mut().filter(|d| **d != 0.0) {
         *dy = -lift;
     }
+}
+
+/// The bottom edge of the regions marked as moving (`dys` entry non-zero).
+fn moving_bottom(regions: &[(i32, i32)], dys: &[f32]) -> Option<i32> {
+    regions.iter().zip(dys).filter(|(_, &d)| d != 0.0).map(|(r, _)| r.0 + r.1).max()
 }
 
 /// The top edge of the regions marked as moving (`dys` entry non-zero).
@@ -266,14 +289,77 @@ mod tests {
         let mixed=text_ass::AlignSet {top:true,bottom:true,middle:false};
         let mut dys=Vec::new();
         let regions=[(100,40),(940,40)];
-        lift_dys(ass::Origin::Text(style),true,&regions,mixed,&mut dys);
+        lift_dys(ass::Origin::Text(style),true,text_style::HudBand::CLASSIC,&regions,mixed,&mut dys);
         assert_eq!(dys,[0.0,-200.0]);
-        lift_dys(ass::Origin::Authored,true,&regions,mixed,&mut dys);
+        lift_dys(ass::Origin::Authored,true,text_style::HudBand::CLASSIC,&regions,mixed,&mut dys);
         assert_eq!(dys,[0.0,0.0]);
-        lift_dys(ass::Origin::Text(style),true,&[(100,880)],mixed,&mut dys);
+        lift_dys(ass::Origin::Text(style),true,text_style::HudBand::CLASSIC,&[(100,880)],mixed,&mut dys);
         assert_eq!(dys,[0.0],"a merged top/bottom region conservatively stays still");
-        lift_dys(ass::Origin::Text(style),false,&regions,mixed,&mut dys);
+        lift_dys(ass::Origin::Text(style),false,text_style::HudBand::CLASSIC,&regions,mixed,&mut dys);
         assert_eq!(dys,[0.0,0.0]);
+    }
+
+    const BOTTOM: text_ass::AlignSet = text_ass::AlignSet { top: false, bottom: true, middle: false };
+    const TOP_AND_BOTTOM: text_ass::AlignSet = text_ass::AlignSet { top: true, bottom: true, middle: false };
+
+    fn dys_in(band: text_style::HudBand, style: text_style::TextStyle, regions: &[(i32, i32)], aligns: text_ass::AlignSet) -> Vec<f32> {
+        let mut dys = Vec::new();
+        lift_dys(ass::Origin::Text(style), true, band, regions, aligns, &mut dys);
+        dys
+    }
+
+    /// **The section rows of the table, through the libass lift**: with Info (block top 668) or
+    /// Chapters (684) open, a bottom cue rises by the band's lift AND the rise that clears the section,
+    /// so its line ends on the table's limit. libass's bottom anchor (`MarginV` 97) sits 3 px under the
+    /// bespoke caption's, as it does with nothing open.
+    #[test]
+    fn a_bottom_cue_stands_on_the_limit_the_open_section_leaves() {
+        use crate::catalog::session::{SubtitlePosition, SubtitleSize};
+        let table = [
+            (668.0, [656.0, 620.0, 460.0]), // Info
+            (684.0, [672.0, 620.0, 460.0]), // Chapters
+        ];
+        for (top, limits) in table {
+            let band = text_style::HudBand::CLASSIC.with_rise(text_style::HudBand::CLASSIC.rise_to_clear(top));
+            for (position, limit) in SubtitlePosition::LADDER.into_iter().zip(limits) {
+                let trim = text_style::bottom_anchor_y(position) - (text_style::SUB_BASE_Y - text_style::position_lift(position));
+                assert_eq!(trim, 3.0);
+                for size in SubtitleSize::LADDER {
+                    let style = text_style::TextStyle { size, position };
+                    let h = (text_style::CAPTION_LINE_PITCH * style.scale()).round() as i32;
+                    let bottom = text_style::bottom_anchor_y(position) as i32;
+                    let dys = dys_in(band, style, &[(bottom - h, h)], BOTTOM);
+                    assert_eq!(bottom as f32 + dys[0] - trim, limit, "{top} {position:?} {size:?}: {dys:?}");
+                }
+            }
+        }
+    }
+
+    /// One delta for every region that moves, a region above the limit staying, with a section open.
+    #[test]
+    fn the_section_rise_is_one_delta_for_the_group_that_moves() {
+        let style = text_style::TextStyle::default();
+        let band = text_style::HudBand::CLASSIC.with_rise(text_style::HudBand::CLASSIC.rise_to_clear(668.0));
+        let (y, h) = (text_style::bottom_anchor_y(style.position) as i32 - 48, 48);
+        let regions = [(y - h, h), (y, h), (100, 48)];
+        let dys = dys_in(band, style, &regions, TOP_AND_BOTTOM);
+        assert_eq!(dys, [-324.0, -324.0, 0.0], "the two lines of the block move together, the top sign stays");
+    }
+
+    /// Where the lifted block's top would cross the safe area the rise stops: the block overlaps the
+    /// section, the same region, moved.
+    #[test]
+    fn the_section_rise_stops_where_the_block_would_leave_the_safe_area() {
+        use crate::catalog::session::{SubtitlePosition, SubtitleSize};
+        let style = text_style::TextStyle { size: SubtitleSize::ExtraLarge, position: SubtitlePosition::Low };
+        let height = (3.0 * text_style::CAPTION_LINE_PITCH * style.scale()) as i32;
+        let top = text_style::bottom_anchor_y(style.position) as i32 - height;
+        // a section 880 px tall would lift the block past the top of the screen
+        let band = text_style::HudBand::CLASSIC.with_rise(text_style::HudBand::CLASSIC.rise_to_clear(200.0));
+        let dys = dys_in(band, style, &[(top, height)], BOTTOM);
+        let lifted = top as f32 + dys[0];
+        assert!((lifted - (crate::ui::consts::SAFE.y + 3.0)).abs() < 1.0, "the block stops at the safe top: {lifted}");
+        assert_eq!(dys.len(), 1);
     }
 
     #[test]
