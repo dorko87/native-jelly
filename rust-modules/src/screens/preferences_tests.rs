@@ -107,7 +107,7 @@ fn every_field_row_pushes_its_picker_and_nothing_else() {
     let mut playback = PreferencesPage::new(EntryId(0), Kind::Playback);
     let mut audio = loaded_audio_page(&account);
     for (page, fields) in [
-        (&mut playback, vec![PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::NextEpisode, PickerKind::SkipInterval]),
+        (&mut playback, vec![PickerKind::Quality, PickerKind::DirectPlay, PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::HdrOverlay, PickerKind::NextEpisode, PickerKind::SkipInterval]),
         (&mut audio, vec![PickerKind::AudioLanguage, PickerKind::SubtitleMode, PickerKind::SubtitleLanguage, PickerKind::ForcedSubtitles]),
     ] {
         for field in fields {
@@ -158,27 +158,34 @@ fn the_field_list_rereads_a_local_value_a_picker_committed() {
     crate::route::restore_quality(previous);
 }
 
-/// A Size/Position pick made anywhere (the player's Style pages publish the live value before
-/// their write lands) shows in the list's cached read-outs on its next tick.
+/// A Size/Position/HDR overlay pick made anywhere (the player's Style pages publish the live value
+/// before their write lands) shows in the list's cached read-outs on its next tick.
 #[test]
 fn the_field_list_rereads_a_subtitle_look_picked_elsewhere() {
     let _serial = nj_base::testlock::serial();
     let _session = crate::catalog::session::TempSession::new("pref-parent-look");
     let (size, position) = (crate::route::subtitle_size(), crate::route::subtitle_position());
+    let hdr = crate::route::hdr_overlay_brightness();
     crate::route::restore_subtitle_size(crate::route::SubtitleSize::Medium);
     crate::route::restore_subtitle_position(crate::route::SubtitlePosition::Low);
+    crate::route::restore_hdr_overlay_brightness(crate::route::HdrOverlayBrightness::ThreeQuarters);
     let mut parent = PreferencesPage::new(EntryId(0), Kind::Playback);
     let size_row = parent.form.index_of(&RowId::Field(PickerKind::SubtitleSize)).unwrap();
     let position_row = parent.form.index_of(&RowId::Field(PickerKind::SubtitlePosition)).unwrap();
+    let hdr_row = parent.form.index_of(&RowId::Field(PickerKind::HdrOverlay)).unwrap();
     assert_eq!(parent.state.values[size_row], nj_platform::i18n::msg::settings_playback_subtitle_size_medium());
+    assert_eq!(parent.state.values[hdr_row], nj_platform::i18n::msg::settings_playback_hdr_overlay_three_quarters());
 
     crate::route::restore_subtitle_size(crate::route::SubtitleSize::Large);
     crate::route::restore_subtitle_position(crate::route::SubtitlePosition::High);
+    crate::route::restore_hdr_overlay_brightness(crate::route::HdrOverlayBrightness::Half);
     drive(&mut parent, tick(), 0);
     assert_eq!(parent.state.values[size_row], nj_platform::i18n::msg::settings_playback_subtitle_size_large());
     assert_eq!(parent.state.values[position_row], nj_platform::i18n::msg::settings_playback_subtitle_position_high());
+    assert_eq!(parent.state.values[hdr_row], nj_platform::i18n::msg::settings_playback_hdr_overlay_half());
     crate::route::restore_subtitle_size(size);
     crate::route::restore_subtitle_position(position);
+    crate::route::restore_hdr_overlay_brightness(hdr);
 }
 
 /// Every field belongs to exactly the page whose list shows it: the Audio & Subtitles page lists

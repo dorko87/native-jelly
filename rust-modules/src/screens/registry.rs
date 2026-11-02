@@ -141,6 +141,7 @@ pub(crate) enum PreferenceCmd {
     RootBack { choice: crate::catalog::session::RootBack, reply: std::sync::mpsc::Sender<bool> },
     SubtitleSize { size: crate::catalog::session::SubtitleSize, reply: std::sync::mpsc::Sender<bool> },
     SubtitlePosition { position: crate::catalog::session::SubtitlePosition, reply: std::sync::mpsc::Sender<bool> },
+    HdrOverlayBrightness { brightness: crate::catalog::session::HdrOverlayBrightness, reply: std::sync::mpsc::Sender<bool> },
     Language { language: nj_platform::i18n::Preference, reply: std::sync::mpsc::Sender<bool> },
 }
 

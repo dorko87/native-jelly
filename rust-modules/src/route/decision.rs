@@ -5697,6 +5697,62 @@ pub(crate) fn select_subtitle_position(position: SubtitlePosition, reply: Option
     });
 }
 
+/// How bright the player's overlay and captions are drawn while the picture is HDR — install-wide,
+/// like [`SUBTITLE_SIZE`]. Read once per frame by the app's player draw ([`overlay_gain`]).
+static HDR_OVERLAY_BRIGHTNESS: AtomicU8 = AtomicU8::new(1); // HdrOverlayBrightness::ThreeQuarters's index
+
+pub(crate) fn hdr_overlay_brightness() -> HdrOverlayBrightness {
+    HdrOverlayBrightness::from_index(HDR_OVERLAY_BRIGHTNESS.load(Ordering::Relaxed))
+}
+
+pub(crate) fn restore_hdr_overlay_brightness(brightness: HdrOverlayBrightness) {
+    #[cfg(test)]
+    nj_base::testlock::assert_held("HDR overlay brightness preference");
+    HDR_OVERLAY_BRIGHTNESS.store(brightness.index(), Ordering::Relaxed);
+}
+
+/// [`select_subtitle_size`] for the HDR overlay brightness.
+pub(crate) fn select_hdr_overlay_brightness(brightness: HdrOverlayBrightness, reply: Option<std::sync::mpsc::Sender<bool>>) {
+    restore_hdr_overlay_brightness(brightness);
+    nj_machine::idle::invalidate();
+    let _ = nj_base::storage_worker::submit_retained(move || {
+        let saved = crate::catalog::session::update_with_outcome(|s| Some(s.with_hdr_overlay_brightness(brightness)))
+            .is_some_and(|write| matches!(write.classify(),
+                crate::catalog::session::async_persistence::CompletionOutcome::Durable(_)));
+        if !saved {
+            nj_base::eventlog::log("HDR overlay brightness: durable write failed (live value kept for this session)");
+        }
+        if let Some(reply) = reply {
+            let _ = reply.send(saved);
+        }
+        nj_machine::idle::invalidate();
+    });
+}
+
+/// Whether the picture the viewer SEES is HDR, given the playing item's HDR flag and the route.
+///
+/// The flag is the source's (`metadata::PlayingItem::hdr`). A direct play or a remux
+/// (`transcoding && remux`: the server copies the video lane into a new container) keeps the
+/// video stream as it is, so the TV is shown HDR; a server re-encode (`transcoding && !remux`) is
+/// treated as tone-mapped to SDR, so the overlay needs no dimming.
+pub(crate) fn hdr_picture(source_hdr: bool, transcoding: bool, remux: bool) -> bool {
+    source_hdr && (!transcoding || remux)
+}
+
+/// The RGB multiplier the player's overlay and subtitles are drawn with: `1.0` unless the picture
+/// is HDR (see [`hdr_picture`]), else the viewer's [`HdrOverlayBrightness`] rung. The pure core of
+/// [`overlay_gain`], so the rule is testable without a session.
+pub(crate) fn overlay_gain_for(source_hdr: bool, transcoding: bool, remux: bool, pick: HdrOverlayBrightness) -> f32 {
+    if hdr_picture(source_hdr, transcoding, remux) { pick.factor() } else { 1.0 }
+}
+
+/// The multiplier the player's overlay and subtitles are drawn with on this route, given the
+/// playing item's HDR flag (`PlayingItem::hdr`): the live HDR overlay brightness pick during an HDR
+/// picture, `1.0` otherwise. Read once per frame by the player branch of the frame loop.
+pub(crate) fn overlay_gain(ps: &PlaybackSession, source_hdr: bool) -> f32 {
+    overlay_gain_for(source_hdr, is_transcoding(ps), is_remux(ps), hdr_overlay_brightness())
+}
+
 pub(crate) fn forced_direct_play(ps: &PlaybackSession) -> bool {
     ps.direct_play_mode == DirectPlayMode::Forced
 }

@@ -110,6 +110,8 @@ pub(crate) enum PickerKind {
     ForcedSubtitles,
     InstantDpadSeeking,
     EpisodeNavigation,
+    // Last so no hashed discriminant (`LogicalState`) moves; its row order is `fields_of`'s.
+    HdrOverlay,
 }
 
 impl SettingsPage {
@@ -128,7 +130,7 @@ impl PickerKind {
     /// The page that lists this field (its picker is pushed from there and returns there).
     pub(crate) fn parent(self) -> SettingsPage {
         match self {
-            PickerKind::Quality | PickerKind::DirectPlay | PickerKind::SubtitleSize | PickerKind::SubtitlePosition | PickerKind::NextEpisode | PickerKind::SkipInterval | PickerKind::InstantDpadSeeking | PickerKind::EpisodeNavigation => SettingsPage::Playback,
+            PickerKind::Quality | PickerKind::DirectPlay | PickerKind::SubtitleSize | PickerKind::SubtitlePosition | PickerKind::HdrOverlay | PickerKind::NextEpisode | PickerKind::SkipInterval | PickerKind::InstantDpadSeeking | PickerKind::EpisodeNavigation => SettingsPage::Playback,
             PickerKind::AudioLanguage | PickerKind::SubtitleMode | PickerKind::SubtitleLanguage | PickerKind::ForcedSubtitles => SettingsPage::AudioSubtitles,
         }
     }

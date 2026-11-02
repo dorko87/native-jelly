@@ -1009,7 +1009,7 @@ fn the_player_panels_dim_through_the_container_from_the_playing_items_corners() 
     assert!(store.run(crate::stores::metadata::MetadataCmd::InstallPlaying(Some(crate::metadata::PlayingItem {
         sid: crate::catalog::ServerId::from_raw(0), rk: "rk".into(), audio: Vec::new(), subs: Vec::new(),
         video_fps: 0.0, width: 0, height: 0, bitrate: 0, dovi: Default::default(),
-        markers: Vec::new(), chapters: Vec::new(), blur: Some(corners),
+        markers: Vec::new(), chapters: Vec::new(), blur: Some(corners), hdr: false,
     }))));
     for (kind, alpha) in [
         (OverlayKind::Tracks { tab: 0 }, DIM_PLAYER),

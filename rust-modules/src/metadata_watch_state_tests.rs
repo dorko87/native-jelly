@@ -335,6 +335,43 @@ fn the_playing_item_cache_hits_only_for_the_same_item_on_the_same_server() {
     clear(test_state(), test_adapter());
 }
 
+/// `PlayingItem.hdr` is the played leaf's video HDR flag (PQ or HLG transfer, or Dolby Vision),
+/// the fact the player's HDR overlay dim reads (#741). Both doors carry it: the cache hit copies the
+/// loaded page's flag, and the fetch reduces the leaf's streams through `convert_streams`, which
+/// is where a Jellyfin `MediaStream` lands after `jf::convert::stream` — so HDR10, HLG and a Dolby
+/// Vision Profile 8 file from Jellyfin all read as HDR, and an SDR one does not.
+#[test]
+fn the_playing_item_carries_the_video_hdr_flag() {
+    let _serial = nj_base::testlock::serial();
+    for hdr in [true, false] {
+        set_current_for_test(test_state(), Some(Detail {
+            sid: SRV_A,
+            rk: "42".into(),
+            audio: vec![Stream { id: 7, ..Default::default() }],
+            hdr,
+            ..Default::default()
+        }));
+        assert_eq!(cached_playing(test_state(), SRV_A, "42", "").map(|p| p.hdr), Some(hdr));
+    }
+    clear(test_state(), test_adapter());
+
+    let jf = |json: serde_json::Value| -> bool {
+        let video: crate::jf::models::MediaStream = serde_json::from_value(json).unwrap();
+        convert_streams(&[crate::jf::convert::stream(&video, "guid", "source")]).hdr
+    };
+    assert!(jf(serde_json::json!({"Type": "Video", "Index": 0, "Codec": "hevc",
+        "VideoRange": "HDR", "VideoRangeType": "HDR10", "ColorTransfer": "smpte2084"})), "HDR10");
+    assert!(jf(serde_json::json!({"Type": "Video", "Index": 0, "Codec": "hevc",
+        "VideoRange": "HDR", "VideoRangeType": "HLG", "ColorTransfer": "arib-std-b67"})), "HLG");
+    assert!(jf(serde_json::json!({"Type": "Video", "Index": 0, "Codec": "hevc",
+        "VideoRange": "HDR", "VideoRangeType": "DOVIWithHDR10", "ColorTransfer": "smpte2084",
+        "DvProfile": 8, "DvBlSignalCompatibilityId": 1})), "Dolby Vision Profile 8.1");
+    assert!(jf(serde_json::json!({"Type": "Video", "Index": 0, "Codec": "hevc",
+        "VideoRange": "HDR", "VideoRangeType": "DOVI", "DvProfile": 5})), "Dolby Vision Profile 5, no transfer");
+    assert!(!jf(serde_json::json!({"Type": "Video", "Index": 0, "Codec": "h264",
+        "VideoRange": "SDR", "VideoRangeType": "SDR", "ColorTransfer": "bt709"})), "SDR");
+}
+
 fn two_versions() -> Detail {
     let version = |part: &str, audio_id: i64, width: i64| Version {
         title: format!("{width}p"),

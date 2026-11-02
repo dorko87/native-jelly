@@ -2621,13 +2621,22 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                         // never was: what is behind these panels is a hardware video plane GL
                         // cannot read back, so there is no host snapshot to take
                         // (`RenderStrategy::VideoPlane`).
-                        app.pages.draw(&mut app.bridge, true);
-                        // …then the captions, while a section draws over the page: above its card
-                        // and its dim, which the page pass would have put them under
-                        // (`PlayerScreen::draw_captions_over_sections`).
-                        if let Some(player) = super::bridge::player_mut(&mut app.pages) {
-                            player.draw_captions_over_sections(&app.player.session, fr.now);
-                        }
+                        //
+                        // During HDR playback the TV lifts the graphics plane, so the whole pass
+                        // draws under the viewer's HDR overlay brightness (`ui::output_gain`: RGB
+                        // only, alpha untouched). 1.0 for SDR, a re-encode, or a chosen 100%.
+                        // The captions drawn over an open section (below) are part of it.
+                        let source_hdr = app.bridge.metadata_view().playing().is_some_and(|p| p.hdr);
+                        let gain = crate::route::overlay_gain(&app.player.session, source_hdr);
+                        crate::ui::output_gain(gain, || {
+                            app.pages.draw(&mut app.bridge, true);
+                            // …then the captions, while a section draws over the page: above its
+                            // card and its dim, which the page pass would have put them under
+                            // (`PlayerScreen::draw_captions_over_sections`).
+                            if let Some(player) = super::bridge::player_mut(&mut app.pages) {
+                                player.draw_captions_over_sections(&app.player.session, fr.now);
+                            }
+                        });
                         // Skipped rather than drawn while one of the player's own panels is
                         // up — `More` carries this very panel's own toggle, and the panel's
                         // content routinely spans wide enough to reach any of their bottom-right

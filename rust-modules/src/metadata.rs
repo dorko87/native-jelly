@@ -2486,6 +2486,11 @@ pub(crate) struct PlayingItem {
     /// so this is the one honest source of "the light under the panel" there
     /// (`screen::Scrim::over_video`).
     pub(crate) blur: Option<[[f32; 3]; 4]>,
+    /// The played leaf's video stream is HDR: a PQ or HLG transfer, or Dolby Vision
+    /// (`convert_streams`' `hdr`; a Jellyfin source reaches it through `jf::convert::stream`'s
+    /// `ColorTransfer` and `VideoRangeType`). The SOURCE's fact, not the picture's: a server
+    /// re-encode keeps it true, so the HDR overlay dim also asks the route (`route::overlay_gain`).
+    pub(crate) hdr: bool,
 }
 
 #[cfg(test)]
@@ -2506,6 +2511,7 @@ impl PlayingItem {
             markers: Vec::new(),
             chapters: Vec::new(),
             blur: None,
+            hdr: false,
         }
     }
 }
@@ -2552,6 +2558,7 @@ fn cached_playing(state: &MetadataState, sid: crate::catalog::ServerId, rk: &str
             markers: d.markers.clone(),
             chapters: d.chapters.clone(),
             blur: d.has_blur.then_some(d.blur),
+            hdr: d.hdr,
         })
 }
 
@@ -2587,7 +2594,7 @@ pub(crate) fn fetch_playing_item(sid: crate::catalog::ServerId, rk: &str, part: 
     let st = version
         .and_then(|m| m.part.first().map(|p| convert_streams(&p.stream)))
         .unwrap_or_default();
-    let (audio, subs, video_fps, dovi) = (st.audio, st.subs, st.fps, st.dovi);
+    let (audio, subs, video_fps, dovi, hdr) = (st.audio, st.subs, st.fps, st.dovi, st.hdr);
     // the frame size rides the same version the streams come from (route.rs's direct-play gate
     // tests it against the device bound — see the field doc)
     let (width, height, bitrate) = version.map(|m| (m.width, m.height, m.bitrate)).unwrap_or((0, 0, 0));
@@ -2608,6 +2615,7 @@ pub(crate) fn fetch_playing_item(sid: crate::catalog::ServerId, rk: &str, part: 
         markers,
         chapters,
         blur,
+        hdr,
     })
 }
 

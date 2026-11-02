@@ -914,6 +914,7 @@ pub(crate) unsafe fn construct(
     crate::route::restore_direct_play_mode(session.direct_play_mode());
     crate::route::restore_subtitle_size(session.subtitle_size());
     crate::route::restore_subtitle_position(session.subtitle_position());
+    crate::route::restore_hdr_overlay_brightness(session.hdr_overlay_brightness());
     crate::route::restore_next_episode_mode(session.next_episode_mode());
     crate::route::restore_skip_interval(session.skip_interval());
     crate::route::restore_root_back(session.root_back());
