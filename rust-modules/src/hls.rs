@@ -529,6 +529,11 @@ pub(crate) fn parse_master(source: &Resource, text: &str) -> Result<MasterPlayli
                 if !matches!(value, "YES" | "NO") {
                     return malformed(line_no, "invalid allow-cache value");
                 }
+            } else if let Some(value) = line.strip_prefix("#EXT-X-IMAGE-STREAM-INF:") {
+                // Jellyfin appends one per trickplay width (DynamicHlsHelper.AddTrickplay). Its URI
+                // is an attribute, so no URI line follows; trickplay comes from the Items API, so
+                // the stream is checked like a variant's attribute list and skipped.
+                parse_variant_bandwidth(value, line_no)?;
             } else if line == "#EXTM3U" {
                 return malformed(line_no, "duplicate header");
             } else if let Some(feature) = forbidden_feature(line) {
@@ -1277,6 +1282,30 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.variant.bandwidth, 7_104_000);
         assert_eq!(parsed.variant.resource.path, "/videos/0000-item/main.m3u8?MediaSourceId=src&PlaySessionId=ps&ApiKey=k1");
+    }
+
+    /// With trickplay generated for the item, Jellyfin ends the master with one
+    /// `EXT-X-IMAGE-STREAM-INF` per trickplay width (`DynamicHlsHelper.AddTrickplay`, on unless the
+    /// request sends `EnableTrickplay=false`). The image stream is skipped and the first video
+    /// variant still plays; a malformed image stream still fails closed.
+    #[test]
+    fn jellyfin_trickplay_image_streams_are_skipped() {
+        let master = source("/videos/0000-item/master.m3u8?MediaSourceId=src&PlaySessionId=ps&ApiKey=k1");
+        let parsed = parse_master(
+            &master,
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=20448000,AVERAGE-BANDWIDTH=20448000,VIDEO-RANGE=PQ,CODECS=\"hvc1.2.4.L153,mp4a.40.2\",RESOLUTION=3840x1600,FRAME-RATE=23.976\nmain.m3u8?MediaSourceId=src&PlaySessionId=ps&VideoCodec=hevc&AudioCodec=aac&VideoBitrate=20000000&ApiKey=k1\n#EXT-X-IMAGE-STREAM-INF:BANDWIDTH=8406,RESOLUTION=320x133,CODECS=\"jpeg\",URI=\"Trickplay/320/tiles.m3u8?MediaSourceId=src&ApiKey=k1\"\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.variant.bandwidth, 20_448_000);
+        assert_eq!(parsed.variant.resource.path, "/videos/0000-item/main.m3u8?MediaSourceId=src&PlaySessionId=ps&VideoCodec=hevc&AudioCodec=aac&VideoBitrate=20000000&ApiKey=k1");
+
+        assert!(matches!(
+            parse_master(
+                &master,
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nmain.m3u8\n#EXT-X-IMAGE-STREAM-INF:RESOLUTION=320x133,URI=\"Trickplay/320/tiles.m3u8\"\n",
+            ),
+            Err(Error::Malformed { line: 4, .. })
+        ));
     }
 
     /// Jellyfin's credential is `ApiKey`, and the server repeats it in every child it lists; it is
