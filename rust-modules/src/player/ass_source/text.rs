@@ -21,6 +21,8 @@ pub(crate) fn begin_with_text(
 ) -> u64 {
     let style = TextStyle::current();
     let header = text_ass::header(&style);
+    // Compare the trimmed embedded headers the store keeps, or a reopen never matches.
+    headers = normalize_headers(headers);
     headers.extend(
         tracks
             .iter()
@@ -304,6 +306,31 @@ mod tests {
         };
         events.clone()
     }
+    #[test]
+    fn a_reopen_with_a_terminated_embedded_header_keeps_the_text_tracks() {
+        let _g = nj_base::testlock::serial();
+        let _restore = Restore::new();
+        crate::player::SHARED
+            .playpos_ns
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let open = || {
+            begin_with_text(
+                "terminated-reopen",
+                vec![(0, b"[Script Info]\n\0".to_vec())],
+                vec![(1, TextDialect::Srt)],
+                vec![],
+            )
+        };
+        let generation = open();
+        push_text(generation, 1, S, 2 * S, b"cue", "cue");
+        open();
+        assert_eq!(
+            store().texts[&1].raw.len(),
+            1,
+            "the identity check compares the trimmed header the store keeps"
+        );
+    }
+
     #[test]
     fn a_refresh_does_not_hold_the_store_while_building_its_view() {
         let _g = nj_base::testlock::serial();
