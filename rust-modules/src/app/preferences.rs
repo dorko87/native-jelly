@@ -84,5 +84,8 @@ pub(super) fn execute(command: PreferenceCmd) {
         PreferenceCmd::SubtitlePosition { position, reply } => {
             crate::route::select_subtitle_position(position, Some(reply))
         }
+        PreferenceCmd::HdrOverlayBrightness { brightness, reply } => {
+            crate::route::select_hdr_overlay_brightness(brightness, Some(reply))
+        }
     }
 }

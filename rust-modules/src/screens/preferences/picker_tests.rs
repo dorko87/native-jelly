@@ -186,16 +186,19 @@ fn back_is_held_while_an_account_write_is_in_flight() {
     assert_eq!(handled, Handled::Yes, "BACK is swallowed until the receipt lands");
 }
 
-/// Subtitle Size and Position are Local-save pickers like Quality: the checked entry pops with no
-/// write; another entry emits exactly its command and pops on the receipt.
+/// Subtitle Size and Position, and the HDR overlay brightness, are Local-save pickers like Quality:
+/// the checked entry pops with no write; another entry emits exactly its command and pops on the
+/// receipt.
 #[test]
 fn the_subtitle_pickers_write_locally_and_pop_on_the_receipt() {
     let _serial = nj_base::testlock::serial();
     let _session = crate::catalog::session::TempSession::new("picker-subtitle-local");
     let (size, position) = (crate::route::subtitle_size(), crate::route::subtitle_position());
+    let hdr = crate::route::hdr_overlay_brightness();
     crate::route::restore_subtitle_size(crate::route::SubtitleSize::Medium);
     crate::route::restore_subtitle_position(crate::route::SubtitlePosition::Low);
-    for field in [PickerKind::SubtitleSize, PickerKind::SubtitlePosition] {
+    crate::route::restore_hdr_overlay_brightness(crate::route::HdrOverlayBrightness::ThreeQuarters);
+    for field in [PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::HdrOverlay] {
         let mut page = PickerPage::new(EntryId(0), field);
         let checked = page.state.checked;
         let emitted = drive(&mut page, ScreenEvent::Activate(checked), checked);
@@ -208,7 +211,8 @@ fn the_subtitle_pickers_write_locally_and_pop_on_the_receipt() {
         assert!(!popped(&emitted), "{field:?}: a write waits for its receipt");
         let reply = emitted.into_iter().find_map(|e| match e.fx {
             Fx::App(AppFx::Preferences(PreferenceCmd::SubtitleSize { reply, .. }))
-            | Fx::App(AppFx::Preferences(PreferenceCmd::SubtitlePosition { reply, .. })) => Some(reply),
+            | Fx::App(AppFx::Preferences(PreferenceCmd::SubtitlePosition { reply, .. }))
+            | Fx::App(AppFx::Preferences(PreferenceCmd::HdrOverlayBrightness { reply, .. })) => Some(reply),
             _ => None,
         }).expect("a local subtitle command");
         reply.send(true).unwrap();
@@ -216,6 +220,7 @@ fn the_subtitle_pickers_write_locally_and_pop_on_the_receipt() {
     }
     crate::route::restore_subtitle_size(size);
     crate::route::restore_subtitle_position(position);
+    crate::route::restore_hdr_overlay_brightness(hdr);
 }
 
 /// The optimistic path publishes the live value before the receipt: the open picker moves its
@@ -271,7 +276,7 @@ fn ok_on_the_checked_size_after_a_failed_write_retries_the_write() {
 fn the_local_subtitle_pickers_never_touch_the_plex_account() {
     let _serial = nj_base::testlock::serial();
     let _session = crate::catalog::session::TempSession::new("pref-local-subtitle-pickers");
-    for field in [PickerKind::SubtitleSize, PickerKind::SubtitlePosition] {
+    for field in [PickerKind::SubtitleSize, PickerKind::SubtitlePosition, PickerKind::HdrOverlay] {
         let mut page = PickerPage::new(EntryId(0), field);
         let mut emitted = drive(&mut page, ScreenEvent::Enter(Enter::Fresh { focus: FocusTarget::ContainerGroup(GroupId(0)) }), 0);
         emitted.extend(drive(&mut page, tick(), 0));

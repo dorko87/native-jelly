@@ -614,6 +614,12 @@ pub struct Session {
     /// the default for the same reason as [`Session::subtitle_size`].
     #[serde(default, deserialize_with = "de_soft_subtitle_position", skip_serializing_if = "is_default_subtitle_position")]
     pub(crate) subtitle_position: SubtitlePosition,
+    /// **How bright the player's overlay and captions are while the picture is HDR** — see
+    /// [`HdrOverlayBrightness`]. Install-wide like [`Session::subtitle_tone`]. Absence is
+    /// ThreeQuarters (the default dim). Skipped at the default for the same reason as
+    /// [`Session::subtitle_size`].
+    #[serde(default, deserialize_with = "de_soft_hdr_overlay_brightness", skip_serializing_if = "is_default_hdr_overlay_brightness")]
+    pub(crate) hdr_overlay_brightness: HdrOverlayBrightness,
     /// **What the player does when an episode with a successor reaches its credits** — see
     /// [`NextEpisodeMode`]. Install-wide like [`Session::playback_quality`]. Absence is
     /// Countdown, which is what every build before the field did. Skipped at the default so a
@@ -749,6 +755,8 @@ struct CanonicalSessionPreferences {
     subtitle_size: SubtitleSize,
     #[serde(default, deserialize_with = "de_soft_subtitle_position", skip_serializing_if = "is_default_subtitle_position")]
     subtitle_position: SubtitlePosition,
+    #[serde(default, deserialize_with = "de_soft_hdr_overlay_brightness", skip_serializing_if = "is_default_hdr_overlay_brightness")]
+    hdr_overlay_brightness: HdrOverlayBrightness,
     #[serde(default, deserialize_with = "de_soft_next_episode_mode", skip_serializing_if = "is_default_next_episode_mode")]
     next_episode_mode: NextEpisodeMode,
     #[serde(default, deserialize_with = "de_soft_skip_interval", skip_serializing_if = "is_default_skip_interval")]
@@ -796,6 +804,7 @@ impl Default for CanonicalSessionPreferences {
             subtitle_tone: SubtitleTone::White,
             subtitle_size: SubtitleSize::Medium,
             subtitle_position: SubtitlePosition::Low,
+            hdr_overlay_brightness: HdrOverlayBrightness::ThreeQuarters,
             next_episode_mode: NextEpisodeMode::Countdown,
             skip_interval: SkipInterval::Seconds10,
             root_back: RootBack::PlatformHome,
@@ -861,6 +870,7 @@ fn split_public(session: &Session) -> Result<nj_platform::storage::state::Public
         subtitle_tone: session.subtitle_tone,
         subtitle_size: session.subtitle_size,
         subtitle_position: session.subtitle_position,
+        hdr_overlay_brightness: session.hdr_overlay_brightness,
         next_episode_mode: session.next_episode_mode,
         skip_interval: session.skip_interval,
         root_back: session.root_back.clone(),
@@ -938,6 +948,7 @@ pub(crate) fn join_canonical(
         subtitle_tone: preferences.subtitle_tone,
         subtitle_size: preferences.subtitle_size,
         subtitle_position: preferences.subtitle_position,
+        hdr_overlay_brightness: preferences.hdr_overlay_brightness,
         next_episode_mode: preferences.next_episode_mode,
         skip_interval: preferences.skip_interval,
         root_back: preferences.root_back,
@@ -974,6 +985,7 @@ fn public_session(public: &nj_platform::storage::state::PublicPayload) -> Sessio
         subtitle_tone: preferences.subtitle_tone,
         subtitle_size: preferences.subtitle_size,
         subtitle_position: preferences.subtitle_position,
+        hdr_overlay_brightness: preferences.hdr_overlay_brightness,
         next_episode_mode: preferences.next_episode_mode,
         skip_interval: preferences.skip_interval,
         root_back: preferences.root_back,
@@ -1334,6 +1346,54 @@ impl SubtitlePosition {
 
     pub(crate) fn index(self) -> u8 {
         Self::LADDER.iter().position(|&p| p == self).unwrap_or(0) as u8
+    }
+}
+
+/// **How bright the player's overlay and captions are drawn while the picture is HDR** —
+/// install-wide like [`SubtitleTone`]. A television maps graphics white in an HDR picture to a far
+/// brighter level than the same white in SDR (the HUD and the captions are graphics; the panel
+/// treats them as part of the HDR scene), so a viewer in a dark room is dazzled by the transport
+/// and the subtitles. This is how far RGB is scaled down then; it never applies to an SDR picture.
+/// Absence is `ThreeQuarters`: the overlay is dimmed to 75% in an HDR picture unless the viewer
+/// chose otherwise (`Full` turns the dim off). The factor is a plain linear multiplier on the
+/// sRGB-encoded values (alpha is untouched), which is the same multiply the painter's `rgb`
+/// cascade already is.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HdrOverlayBrightness {
+    #[serde(rename = "full")]
+    Full,
+    #[default]
+    #[serde(rename = "three_quarters")]
+    ThreeQuarters,
+    #[serde(rename = "half")]
+    Half,
+}
+
+impl HdrOverlayBrightness {
+    /// Every rung, brightest first — the order the picker lists them in.
+    pub(crate) const LADDER: [HdrOverlayBrightness; 3] = [
+        HdrOverlayBrightness::Full,
+        HdrOverlayBrightness::ThreeQuarters,
+        HdrOverlayBrightness::Half,
+    ];
+
+    /// An in-memory index back to a rung — out of range is the default, never a neighbouring rung,
+    /// for the reason [`SubtitleTone::from_index`] gives: the ladder can grow or shrink.
+    pub(crate) fn from_index(i: u8) -> HdrOverlayBrightness {
+        Self::LADDER.get(i as usize).copied().unwrap_or_default()
+    }
+
+    pub(crate) fn index(self) -> u8 {
+        Self::LADDER.iter().position(|&b| b == self).unwrap_or(1) as u8
+    }
+
+    /// The RGB multiplier this rung applies to an HDR picture's overlay, `1.0` for `Full`.
+    pub(crate) fn factor(self) -> f32 {
+        match self {
+            HdrOverlayBrightness::Full => 1.0,
+            HdrOverlayBrightness::ThreeQuarters => 0.75,
+            HdrOverlayBrightness::Half => 0.5,
+        }
     }
 }
 
@@ -2372,6 +2432,23 @@ fn is_default_subtitle_position(position: &SubtitlePosition) -> bool {
     *position == SubtitlePosition::default()
 }
 
+/// The HDR overlay brightness is a preference too: a spelling this build does not know degrades to
+/// the default (75%).
+fn de_soft_hdr_overlay_brightness<'de, D>(d: D) -> Result<HdrOverlayBrightness, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Ok(v) = serde_json::Value::deserialize(d) else {
+        return Ok(HdrOverlayBrightness::default());
+    };
+    Ok(serde_json::from_value::<HdrOverlayBrightness>(v).unwrap_or_default())
+}
+
+/// `skip_serializing_if` needs a function, not just `PartialEq` with `Default::default()`.
+fn is_default_hdr_overlay_brightness(brightness: &HdrOverlayBrightness) -> bool {
+    *brightness == HdrOverlayBrightness::default()
+}
+
 /// The next-episode mode is a preference too: a spelling this build does not know degrades to Countdown.
 fn de_soft_next_episode_mode<'de, D>(d: D) -> Result<NextEpisodeMode, D::Error>
 where
@@ -2672,6 +2749,16 @@ impl Session {
     pub(crate) fn with_subtitle_position(&self, position: SubtitlePosition) -> Self {
         let mut next = self.clone();
         next.subtitle_position = position;
+        next
+    }
+
+    pub(crate) fn hdr_overlay_brightness(&self) -> HdrOverlayBrightness {
+        self.hdr_overlay_brightness
+    }
+
+    pub(crate) fn with_hdr_overlay_brightness(&self, brightness: HdrOverlayBrightness) -> Self {
+        let mut next = self.clone();
+        next.hdr_overlay_brightness = brightness;
         next
     }
 
@@ -5953,6 +6040,67 @@ mod skip_interval_tests {
         }
         assert_eq!(SkipInterval::from_index(200), SkipInterval::Seconds10);
         assert_eq!(SkipInterval::Seconds10.ns(), 10_000_000_000);
+    }
+}
+
+/// `Session::hdr_overlay_brightness` (#741): soft-parse, omit-at-default (so committed replay
+/// fixtures and every session written before the field existed serialize unchanged) and
+/// round-trip. The default is 75%, so a chosen 100% is a real value that must be written.
+#[cfg(test)]
+mod hdr_overlay_brightness_tests {
+    use super::*;
+
+    #[test]
+    fn absent_or_malformed_is_three_quarters() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"hdr_overlay_brightness": null}),
+            serde_json::json!({"hdr_overlay_brightness": "a_quarter"}),
+            serde_json::json!({"hdr_overlay_brightness": 50}),
+        ] {
+            let session: Session = serde_json::from_value(value.clone())
+                .unwrap_or_else(|e| panic!("{value}: a bad preference must not fail the session: {e}"));
+            assert_eq!(session.hdr_overlay_brightness(), HdrOverlayBrightness::ThreeQuarters, "{value}");
+        }
+    }
+
+    #[test]
+    fn the_default_is_not_serialized() {
+        let session = Session::default();
+        assert_eq!(session.hdr_overlay_brightness(), HdrOverlayBrightness::ThreeQuarters);
+        assert!(!serde_json::to_string(&session).unwrap().contains("hdr_overlay_brightness"));
+        let prefs = serde_json::to_string(&split_public(&session).unwrap().preferences).unwrap();
+        assert!(!prefs.contains("hdr_overlay_brightness"), "{prefs}");
+    }
+
+    /// A picked 50% and a picked 100% are both written under their own spelling (100% is not the
+    /// default, so it is not skipped and is never reinterpreted as the 75% default) and survive
+    /// both storage formats.
+    #[test]
+    fn a_pick_round_trips_through_both_formats() {
+        for (brightness, wire) in [(HdrOverlayBrightness::Full, "full"), (HdrOverlayBrightness::Half, "half")] {
+            let session = Session::default().with_hdr_overlay_brightness(brightness);
+            let json = serde_json::to_value(&session).unwrap();
+            assert_eq!(json["hdr_overlay_brightness"], wire);
+            let round: Session = serde_json::from_value(json).unwrap();
+            assert_eq!(round.hdr_overlay_brightness(), brightness);
+
+            let (public, protected) = split_canonical(&session).unwrap();
+            assert_eq!(join_canonical(&public, &protected).unwrap().hdr_overlay_brightness(), brightness);
+            assert_eq!(public_session(&public).hdr_overlay_brightness(), brightness);
+        }
+    }
+
+    /// The factors are the plain 1.0 / 0.75 / 0.5 multipliers the picker's labels say.
+    #[test]
+    fn the_ladder_is_brightest_first_and_indexes_back_to_itself() {
+        assert_eq!(HdrOverlayBrightness::default(), HdrOverlayBrightness::ThreeQuarters);
+        let factors: Vec<f32> = HdrOverlayBrightness::LADDER.iter().map(|b| b.factor()).collect();
+        assert_eq!(factors, [1.0, 0.75, 0.5]);
+        for brightness in HdrOverlayBrightness::LADDER {
+            assert_eq!(HdrOverlayBrightness::from_index(brightness.index()), brightness);
+        }
+        assert_eq!(HdrOverlayBrightness::from_index(200), HdrOverlayBrightness::ThreeQuarters);
     }
 }
 

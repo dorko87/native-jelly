@@ -84,13 +84,15 @@ impl PickerPage {
     fn current(&self) -> Value {
         resolve_value(self.state.field, self.state.quality, self.state.direct_play, self.txn.prefs())
     }
-    /// Whether the STORED setting already is `value`. Only Size and Position can differ from
-    /// [`Self::current`]: they publish the live value before the write lands, so after a failed
-    /// write the checked row is live but not on disk, and OK on it must retry rather than pop.
+    /// Whether the STORED setting already is `value`. Only Size, Position and the HDR overlay
+    /// brightness can differ from [`Self::current`]: they publish the live value before the write
+    /// lands, so after a failed write the checked row is live but not on disk, and OK on it must
+    /// retry rather than pop.
     fn durable(&self, value: &Value) -> bool {
         match value {
             Value::SubtitleSize(v) => crate::catalog::session::peek().subtitle_size() == *v,
             Value::SubtitlePosition(v) => crate::catalog::session::peek().subtitle_position() == *v,
+            Value::HdrOverlay(v) => crate::catalog::session::peek().hdr_overlay_brightness() == *v,
             _ => true,
         }
     }
@@ -172,7 +174,7 @@ impl PickerPage {
     }
     fn commit(&mut self, value: Value, fx: &mut Effects<'_, InnerHost>) {
         match value {
-            Value::Quality(_) | Value::DirectPlay(_) | Value::NextEpisode(_) | Value::SkipInterval(_) | Value::InstantDpadSeeking(_) | Value::EpisodeNavigation(_) | Value::SubtitleSize(_) | Value::SubtitlePosition(_) => self.txn.save_local(&mut self.state.io, value, fx),
+            Value::Quality(_) | Value::DirectPlay(_) | Value::NextEpisode(_) | Value::SkipInterval(_) | Value::InstantDpadSeeking(_) | Value::EpisodeNavigation(_) | Value::SubtitleSize(_) | Value::SubtitlePosition(_) | Value::HdrOverlay(_) => self.txn.save_local(&mut self.state.io, value, fx),
             value => {
                 let mut update = PreferenceUpdate::default();
                 match (self.state.field, value) {
