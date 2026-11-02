@@ -621,6 +621,12 @@ fn card_geometry() -> (Rect, f32) {
     (Rect::new(cx, cyt, cw, ch), 28.0f32)
 }
 
+/// The resting top edge of the card (668): what an open Info card covers from, which the captions
+/// rise clear of (`player_hud::caption_rise`).
+pub(crate) fn block_top() -> f32 {
+    card_geometry().0.y
+}
+
 /// The `i`-th action button's rect, widened for the longest translated action label. The same
 /// measured formula [`InfoPanelPart::place`] answers the focus engine with, so a stop built from it lands
 /// on the pixel the button was drawn at.

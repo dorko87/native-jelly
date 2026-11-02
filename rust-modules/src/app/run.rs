@@ -2371,6 +2371,15 @@ pub(crate) unsafe fn update(app: &mut App, fr: &mut Frame) {
         if let Some(player) = super::bridge::player_mut(&mut app.pages) {
             player.slot = fr.ctrl;
         }
+        // …and the captions' rise clear of an open Info card or Chapters strip, stepped HERE and not
+        // from the instance's own `Tick`: the sections are the container's surfaces, whose appear
+        // springs the dispatcher steps ahead of the page and whose open/close lands in the same frame
+        // after both, so only after the frame can the limit see them and start on the frame their
+        // appear does (`PlayerScreen::follow_sections`).
+        super::bridge::player_follow_sections(
+            &mut app.pages,
+            nj_machine::machine::Tick { ms: fr.now, dt_us: (fr.dt * 1_000_000.0) as u32 },
+        );
         // Async play resolve: install the worker's plan and start the engine. Permission comes
         // from the window/playback lifecycle, independently of which screen is mounted.
         // A fresh accepted resolve owns a different playback from any parked foreground retry.
@@ -2613,6 +2622,12 @@ pub(crate) unsafe fn draw(app: &mut App, fr: &mut Frame) -> (i32, i32, i32, i32)
                         // cannot read back, so there is no host snapshot to take
                         // (`RenderStrategy::VideoPlane`).
                         app.pages.draw(&mut app.bridge, true);
+                        // …then the captions, while a section draws over the page: above its card
+                        // and its dim, which the page pass would have put them under
+                        // (`PlayerScreen::draw_captions_over_sections`).
+                        if let Some(player) = super::bridge::player_mut(&mut app.pages) {
+                            player.draw_captions_over_sections(&app.player.session, fr.now);
+                        }
                         // Skipped rather than drawn while one of the player's own panels is
                         // up — `More` carries this very panel's own toggle, and the panel's
                         // content routinely spans wide enough to reach any of their bottom-right

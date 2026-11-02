@@ -44,6 +44,7 @@ use crate::ui::screen::{
     HitSource, Hover, Placed, RenderStrategy, Screen, ScreenEvent, Seat, Step, Stop,
 };
 use crate::appkit::up_next::Countdown;
+use crate::player::text_style::HudBand;
 use crate::ui::Rect;
 
 use input::{HudState, Scrub};
@@ -166,6 +167,13 @@ pub(crate) struct PlayerScreen {
     failure_up: bool,
     /// The transport clocks' prewarm memo — a render resource, not logical state (`prepare`).
     clock_warm: crate::appkit::player_hud::ClockWarm,
+    /// **How far the captions have risen to stand clear of an open section** (Info, Chapters):
+    /// the limit's own springs, stepped by [`Self::follow_sections`] once per frame after the
+    /// container has stepped the sections' appear springs, so both start on the same frame.
+    captions: crate::appkit::player_hud::caption_rise::CaptionRise,
+    /// The sections over this page as of the last [`Self::follow_sections`]: what the caption draw
+    /// order follows (`OpenSections::visible`).
+    sections: crate::appkit::player_hud::caption_rise::OpenSections,
 }
 
 impl PlayerScreen {
@@ -194,6 +202,8 @@ impl PlayerScreen {
             failure_sel: 0,
             failure_up: false,
             clock_warm: Default::default(),
+            captions: Default::default(),
+            sections: Default::default(),
         }
     }
 
@@ -241,8 +251,59 @@ impl PlayerScreen {
     }
 
     /// Draw the image-subtitle display set — the render half this screen owns.
-    pub(crate) fn draw_subtitle_bitmap(&mut self, hud_up: bool) {
-        crate::appkit::player_hud::draw_subtitle_bitmap(&mut self.render.subs, hud_up);
+    pub(crate) fn draw_subtitle_bitmap(&mut self, hud_up: bool, band: HudBand) {
+        crate::appkit::player_hud::draw_subtitle_bitmap(&mut self.render.subs, hud_up, band);
+    }
+
+    /// **Every caption path, in one place** (libass text, the fault message, PGS/VobSub, the
+    /// sidecar notice): each reads the transport's `band` this frame, rise included, so they lift
+    /// together. The frame draws them in the page pass, or over an open section
+    /// ([`Self::draw_captions_over_sections`]).
+    fn draw_captions(&mut self, ps: &crate::route::PlaybackSession, subs_lift: bool, band: HudBand) {
+        self.render.ass.draw(subs_lift, band);
+        if let Some(message) = self.render.ass.error() {
+            crate::appkit::player_hud::draw_subtitle_message(message, subs_lift, band);
+        }
+        self.draw_subtitle_bitmap(subs_lift, band); // PGS/VobSub image subs
+        crate::appkit::player_hud::draw_subtitles(subs_lift, !crate::route::client_renders_subtitle(ps), band);
+    }
+
+    /// **Do the captions draw above the sections this frame?** While a section draws something (open,
+    /// or fading out: `OpenSections::visible`), so its card and its dim cannot cover them — unless the
+    /// repair alert has the screen, which the page pass draws over its captions.
+    fn captions_over_sections(&self) -> bool {
+        self.sections.visible && !self.repair_alert.visible()
+    }
+
+    /// **The captions, over the sections** (`app/run.rs`, after the container has drawn the page and
+    /// its surfaces): the page pass left them out ([`Self::captions_over_sections`]), so the frame's
+    /// last layer under the instruments is the caption, clear of the section it rose above.
+    pub(crate) fn draw_captions_over_sections(&mut self, ps: &crate::route::PlaybackSession, now: u32) {
+        if self.captions_over_sections() {
+            let subs_lift = self.subs_lift(ps, now);
+            let band = self.caption_band();
+            self.draw_captions(ps, subs_lift, band);
+        }
+    }
+
+    /// **The caption band this frame**: the transport's, carrying the rise the open sections have
+    /// lifted the captions by ([`CaptionRise::presented`](crate::appkit::player_hud::caption_rise::CaptionRise::presented)).
+    fn caption_band(&self) -> HudBand {
+        HudBand::CLASSIC.with_rise(self.captions.presented())
+    }
+
+    /// **Aim the captions' rise at the sections the container has open** and step it, once per frame
+    /// (`app/run.rs`'s `update`, after the dispatcher has stepped every surface's appear spring), so
+    /// the limit's first step lands on the frame the section's appear takes its first.
+    pub(crate) fn follow_sections(
+        &mut self,
+        now: crate::appkit::player_hud::caption_rise::OpenSections,
+        t: nj_machine::machine::Tick,
+        present: &mut nj_machine::machine::PresentHandle<'_>,
+    ) {
+        self.captions.follow(now.open, HudBand::CLASSIC, now.top);
+        self.captions.step(t, present, now.held);
+        self.sections = now;
     }
 
     /// The transport, with this instance's own springs, memo and countdown. Paint only: what a
@@ -1375,12 +1436,14 @@ impl<H: PlayerLike + crate::screens::registry::MetadataLike> Screen<H> for Playe
         // capsule is the exception: it HIDES the transport rather than sharing its read time, so
         // captions stay at their normal `SUB_BASE_Y` even while it is up (`Self::subs_lift`).
         let subs_lift = self.subs_lift(ps, now);
-        self.render.ass.draw(subs_lift);
-        if let Some(message) = self.render.ass.error() {
-            crate::appkit::player_hud::draw_subtitle_message(message, subs_lift);
+        // **Captions draw above an open section**: while a section draws something they are drawn
+        // after the container's surfaces (`Self::draw_captions_over_sections`), so its card and dim
+        // cannot cover them; on a frame it draws nothing (held at appear 0, or faded) they stay here,
+        // under the transport's scrim, as they always were.
+        if !self.captions_over_sections() {
+            let band = self.caption_band();
+            self.draw_captions(ps, subs_lift, band);
         }
-        self.draw_subtitle_bitmap(subs_lift); // PGS/VobSub image subs
-        crate::appkit::player_hud::draw_subtitles(subs_lift, !crate::route::client_renders_subtitle(ps));
         // What a pointer can hit is registered AFTER the paint, by `record_stops`, from this
         // screen's own `Focusable` — the rects D-pad focus uses, in the z-order `groups` states.
         // `Hover::Ignore` on the transport's stops: the old pointer path never followed the mouse
@@ -1435,6 +1498,69 @@ impl<H: PlayerLike + crate::screens::registry::MetadataLike> Screen<H> for Playe
     }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
+    }
+}
+
+/// **The captions rise clear of an open section, through the page** (`docs/text-subtitles.md`): the
+/// sections the container folds are followed into the band every caption reader takes and into the
+/// draw order. The rise's own arithmetic and motion are `appkit::player_hud::caption_rise`'s tests.
+#[cfg(test)]
+mod caption_rise_tests {
+    use super::*;
+    use crate::appkit::player_hud::caption_rise::{OpenSections, SectionSurface};
+    use super::overlay::OverlayKind;
+
+    fn info(open: bool, held: bool, appear: f32) -> OpenSections {
+        let (bit, top) = OverlayKind::Info.caption_section().unwrap();
+        OpenSections::fold([SectionSurface { bit, top, open, held, appear }])
+    }
+
+    #[test]
+    fn the_page_follows_the_sections_into_its_band_and_its_draw_order() {
+        let mut page = PlayerScreen::new(EntryId(9));
+        assert_eq!(page.caption_band(), HudBand::CLASSIC, "nothing open: the transport's own band");
+        assert!(!page.captions_over_sections());
+        let mut present = nj_machine::present::Present::new();
+        let mut ms = 1_000;
+        let mut frame = |page: &mut PlayerScreen, now: OpenSections| {
+            ms += 16;
+            let t = nj_machine::machine::Tick { ms, dt_us: 16_667 };
+            page.follow_sections(now, t, &mut nj_machine::machine::PresentHandle::of(&mut present));
+        };
+        frame(&mut page, info(true, true, 0.0));
+        assert_eq!(page.caption_band(), HudBand::CLASSIC, "held at appear 0: the limit waits");
+        assert!(!page.captions_over_sections(), "…and the caption stays under the transport");
+        frame(&mut page, info(true, false, 0.1));
+        assert!(page.captions_over_sections(), "the first visible frame draws the caption over it");
+        let rise = page.caption_band().rise;
+        assert!(rise[0] > 0.0 && rise[0] < 124.0 && rise[1] == 0.0 && rise[2] == 0.0, "{rise:?}");
+        for _ in 0..300 {
+            frame(&mut page, info(true, false, 1.0));
+        }
+        assert_eq!(page.caption_band(), HudBand::CLASSIC.with_rise([124.0, 0.0, 0.0]), "settled on Info's limit");
+        // BACK: the dismissal frame moves nothing, the fade then carries both home
+        frame(&mut page, info(false, false, 1.0));
+        assert_eq!(page.caption_band().rise, [124.0, 0.0, 0.0]);
+        assert!(page.captions_over_sections(), "still over it while it fades");
+        for _ in 0..300 {
+            frame(&mut page, info(false, false, 0.5));
+        }
+        frame(&mut page, OpenSections::default());
+        assert_eq!(page.caption_band(), HudBand::CLASSIC, "home");
+        assert!(!page.captions_over_sections(), "faded: back under the transport");
+    }
+
+    /// The two sections and where they stand (the Info card's top and the Chapters strip's); no other
+    /// panel is a section.
+    #[test]
+    fn only_the_info_card_and_the_chapters_strip_are_sections() {
+        assert_eq!(OverlayKind::Info.caption_section(), Some((1, 668.0)));
+        assert_eq!(OverlayKind::Chapters.caption_section(), Some((2, 684.0)));
+        for kind in OverlayKind::ALL {
+            if !matches!(kind, OverlayKind::Info | OverlayKind::Chapters) {
+                assert_eq!(kind.caption_section(), None, "{kind:?}");
+            }
+        }
     }
 }
 

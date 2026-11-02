@@ -26,6 +26,21 @@ bottom text moves up; top/middle cues stay. A compositor region merging top and 
 content conservatively stays still. Native parsing, font loading and rasterization stay off
 the UI thread, and unchanged native regions retain their texture uploads.
 
+While the Info card or the Chapters strip is open, a caption's bottom limit is the lower of
+the transport-up limit for the viewer's Position (780 / 620 / 460) and 12 px above the
+section's top (Info 668, Chapters 684): a Low caption stands on 656 over Info and 672 over
+Chapters, while Middle and High already clear both. The limit is kept as a rise per Position
+on `text_style::HudBand`, so every caption path takes it from the same value: the bespoke
+fault and sidecar-notice text, the libass text lift, and PGS/VobSub rects below the limit
+(one shared delta, nothing rescaled). Authored ASS never moves. The rise runs on one critically
+damped spring per Position at the panels' own appear stiffness, starting on the frame the
+section's appear does, on open and on close; while sections stay open it only rises. A caption
+that would leave the safe area stops at its top and overlaps the section at its own size.
+While a section draws anything, the captions draw after the panels, above the card and its
+dim; otherwise they stay under the transport's scrim. Ported from upstream
+[#1196](https://github.com/GLinnik21/plx-native/pull/1196); the sections here are surfaces on
+the player's modal stack, so the rise is stepped from the loop after the container's frame.
+
 Charset order is BOM (including UTF-16), valid UTF-8, then pure-Rust `chardetng` and
 `encoding_rs`. BOM decisions persist across embedded packets. Other embedded decisions
 settle after 160 non-ASCII bytes; language tags supply hints, while unqualified Chinese

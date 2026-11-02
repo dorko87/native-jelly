@@ -2248,6 +2248,42 @@ pub(crate) fn player_hud_policy(d: &Dispatcher<AppHost>) -> HudPolicy {
     }
 }
 
+/// **The player's sections this frame** (the Info card, the Chapters strip: the panels
+/// `OverlayKind::caption_section` names), folded from every such surface that is not `Hidden` —
+/// Opening and Open ones are open, a Closing one still draws while it fades. What the captions' rise
+/// is aimed at and what their draw order follows (`appkit::player_hud::caption_rise`).
+pub(crate) fn player_sections(d: &Dispatcher<AppHost>) -> crate::appkit::player_hud::caption_rise::OpenSections {
+    use crate::appkit::player_hud::caption_rise::{OpenSections, SectionSurface};
+    OpenSections::fold(d.nav.modals.surfaces.iter().filter(|s| s.phase != Phase::Hidden).filter_map(|s| {
+        let AppArg::PlayerOverlay(arg) = &s.entry.arg else { return None };
+        let (bit, top) = arg.kind.caption_section()?;
+        Some(SectionSurface {
+            bit,
+            top,
+            open: matches!(s.phase, Phase::Opening | Phase::Open),
+            held: s.motion.held(),
+            appear: s.motion.appear,
+        })
+    }))
+}
+
+/// **Step the player's caption rise for this frame** (`PlayerScreen::follow_sections`), from the
+/// sections the dispatcher's frame has just stepped. A no-op with no player mounted.
+pub(crate) fn player_follow_sections(d: &mut Dispatcher<AppHost>, tick: Tick) {
+    let sections = player_sections(d);
+    let Some(entry) = d.nav.top_page().map(|page| page.id) else { return };
+    let Dispatcher { nav, present, .. } = d;
+    let Some(player) = nav
+        .entry_mut(entry)
+        .and_then(|e| e.inst.as_mut())
+        .and_then(|i| i.screen.as_any_mut())
+        .and_then(|s| s.downcast_mut::<crate::screens::player::PlayerScreen>())
+    else {
+        return;
+    };
+    player.follow_sections(sections, tick, &mut nj_machine::machine::PresentHandle::of(present));
+}
+
 /// Should the player's diagnostics ("Stats for nerds") panel draw this frame?
 ///
 /// No, while any of the player's own overlay panels (`OverlayKind::Tracks`/`Info`/
