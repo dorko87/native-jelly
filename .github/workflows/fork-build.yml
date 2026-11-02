@@ -105,6 +105,15 @@ jobs:
             vendor/ffmpeg-prefix-host
             vendor/ffmpeg-build
           key: host-ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ci/build-ffmpeg.sh') }}
+      # ffmpeg.org reset the connection on two runs; fetch with retries where build-ffmpeg.sh looks
+      # first (it still checks the pinned sha256).
+      - name: Prefetch the FFmpeg source
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/^VERSION=//p' ci/build-ffmpeg.sh)
+          mkdir -p vendor/ffmpeg-build
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 15             "https://ffmpeg.org/releases/ffmpeg-$v.tar.xz" -o "vendor/ffmpeg-build/ffmpeg-$v.tar.xz"
       # simulators.yml's replay: a new Settings row shifts the committed recordings' anchors.
       - name: Build native macOS simulator
         shell: bash
