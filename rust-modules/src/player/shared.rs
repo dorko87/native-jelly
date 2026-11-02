@@ -1702,7 +1702,7 @@ impl Shared {
 
     /// Whether the native clock is held for the VIEWER's pause, which fences the start's first
     /// Play behind a prime (`reserve_hls_prime_play`).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "hostsim"))]
     pub(crate) fn clock_user_held_for_test(&self) -> bool {
         self.hls_clock.lock().unwrap_or_else(|e| e.into_inner()).user_held
     }

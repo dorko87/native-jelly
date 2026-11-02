@@ -362,14 +362,14 @@ pub(crate) fn take_decoder_revoked() -> bool {
 }
 
 /// The pipeline's decoder release as the app loop sees it, for a test with no native session.
-#[cfg(test)]
+#[cfg(all(test, feature = "hostsim"))]
 pub(crate) fn note_decoder_revoked_for_test() {
     SHARED.decoder_revoked.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// Whether the session's native clock is held for the viewer's pause, for a test with no native
 /// session to observe the fenced first Play on.
-#[cfg(test)]
+#[cfg(all(test, feature = "hostsim"))]
 pub(crate) fn clock_user_held_for_test() -> bool {
     SHARED.clock_user_held_for_test()
 }
