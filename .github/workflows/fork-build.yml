@@ -12,7 +12,7 @@ name: Fork build
 
 on:
   push:
-    branches: [fix/subtitle-script-faces]
+    branches: [fix/subtitle-script-faces, ci/body-length-32bit]
   workflow_dispatch:
 
 permissions:
@@ -132,7 +132,11 @@ jobs:
           mkdir -p dist
           src=$(ls raw/com.sostk.nativejelly.nightly_*_arm.ipk)
           version=${src##*/com.sostk.nativejelly.nightly_}; version=${version%_arm.ipk}
-          tag="subtitle-faces-v${version}-nightly-${DATE}-${GITHUB_RUN_NUMBER}"
+          case "$GITHUB_REF_NAME" in
+            ci/body-length-32bit) what="body-length"; about="a sized body over 4 GiB is not finished at its low 32 bits" ;;
+            *) what="subtitle-faces"; about="bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
+          esac
+          tag="${what}-v${version}-nightly-${DATE}-${GITHUB_RUN_NUMBER}"
           ipk="nativejelly-${tag}.ipk"
           cp "$src" "dist/$ipk"
           ( cd dist && sha256sum "$ipk" > "$ipk.sha256" )
@@ -143,7 +147,7 @@ jobs:
             --title "Native Jelly $tag (fork build, no telemetry)" \
             --prerelease \
             --latest=false \
-            --notes "Fork build of $GITHUB_SHA: bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts). Nightly flavour (com.sostk.nativejelly.nightly), RELEASE=1, telemetry compiled out. sha256: $(cut -d' ' -f1 "dist/$ipk.sha256")"
+            --notes "Fork build of $GITHUB_SHA: ${about}. Nightly flavour (com.sostk.nativejelly.nightly), RELEASE=1, telemetry compiled out. sha256: $(cut -d' ' -f1 "dist/$ipk.sha256")"
           {
             echo "### $tag"
             echo "- ipk: $ipk"
