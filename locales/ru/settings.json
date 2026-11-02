@@ -170,6 +170,7 @@
   "settings.playback.subtitle_size.medium": "Средний",
   "settings.playback.subtitle_size.large": "Большой",
   "settings.playback.subtitle_size.extra_large": "Очень большой",
+  "settings.playback.subtitle_size.huge": "Огромный",
   "settings.playback.subtitle_position": "Положение субтитров",
   "settings.playback.subtitle_position.low": "Низко",
   "settings.playback.subtitle_position.middle": "Посередине",

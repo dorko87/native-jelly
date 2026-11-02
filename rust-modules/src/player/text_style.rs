@@ -22,6 +22,7 @@ pub(crate) fn size_scale(size: SubtitleSize) -> f32 {
         SubtitleSize::Medium => 1.0,
         SubtitleSize::Large => 1.25,
         SubtitleSize::ExtraLarge => 1.5,
+        SubtitleSize::Huge => 1.8,
     }
 }
 pub(crate) fn position_lift(position: SubtitlePosition) -> f32 {
@@ -68,5 +69,22 @@ impl TextStyle {
     }
     pub(crate) fn scale(&self) -> f32 {
         size_scale(self.size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Small to Extra large keep their scales; Huge (1.8, 65 px) is the rung above. Its wrap width
+    /// is 760 * 1.8 = 1368 px, under the 75% cap, so an ordinary two-line cue stays two lines.
+    #[test]
+    fn huge_is_the_rung_above_extra_large_and_wraps_inside_the_cap() {
+        let scales: Vec<f32> = SubtitleSize::LADDER.iter().map(|s| size_scale(*s)).collect();
+        assert_eq!(scales, [0.78, 1.0, 1.25, 1.5, 1.8]);
+        let margins: Vec<u32> = scales.iter().map(|&s| side_margin(s)).collect();
+        assert_eq!(margins, [664, 580, 485, 390, 276]);
+        assert_eq!((CAPTION_FACE * size_scale(SubtitleSize::Huge)).round(), 65.0);
+        assert_eq!(side_margin(10.0), 240, "any size is capped at 75% of the width");
     }
 }

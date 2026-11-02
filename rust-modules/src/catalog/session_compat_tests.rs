@@ -378,6 +378,31 @@ fn the_subtitle_tone_is_white_when_absent_or_unknown_and_round_trips_every_rung(
     assert_eq!(SubtitleTone::from_index(200), SubtitleTone::White, "out of range is white");
 }
 
+/// **`Huge` is a new rung on top of the size ladder**: it round-trips under its own spelling, the
+/// four older rungs keep theirs (no saved pick changes size), and a spelling this build does not
+/// know is read the way a build before `Huge` reads `"huge"`: `Medium`, never a failed load.
+#[test]
+fn huge_round_trips_and_an_unknown_size_is_medium() {
+    for (size, wire) in [
+        (SubtitleSize::Small, "small"),
+        (SubtitleSize::Large, "large"),
+        (SubtitleSize::ExtraLarge, "extra_large"),
+        (SubtitleSize::Huge, "huge"),
+    ] {
+        let json = serde_json::to_value(Session::default().with_subtitle_size(size)).unwrap();
+        assert_eq!(json["subtitle_size"], wire);
+        let again: Session = serde_json::from_value(json).unwrap();
+        assert_eq!(again.subtitle_size(), size);
+    }
+    let parsed: Session = serde_json::from_str(r#"{"client_id":"c","subtitle_size":"gigantic"}"#).unwrap();
+    assert_eq!(parsed.client_id, "c", "an unknown size must not cost the session");
+    assert_eq!(parsed.subtitle_size(), SubtitleSize::Medium);
+    assert_eq!(SubtitleSize::LADDER.last(), Some(&SubtitleSize::Huge), "Huge is the top rung");
+    for (i, size) in SubtitleSize::LADDER.iter().enumerate() {
+        assert_eq!(SubtitleSize::from_index(i as u8), *size);
+    }
+}
+
 /// The tone lives in the PUBLIC preferences half of the canonical split, so it must survive
 /// `split_public` → `join_canonical` and the locked-bundle `public_session` snapshot alike.
 #[test]
