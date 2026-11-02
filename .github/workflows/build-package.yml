@@ -153,6 +153,24 @@ jobs:
             vendor/ffmpeg-build
           key: ffmpeg-${{ runner.arch }}-${{ hashFiles('ci/build-ffmpeg.sh') }}
 
+      # FORK-ONLY: the FFmpeg source where build-ffmpeg.sh looks first (it still checks the pin).
+      - name: Prefetch the FFmpeg source
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=$(sed -n 's/^VERSION=//p' ci/build-ffmpeg.sh)
+          sha=$(sed -n 's/^SHA256=//p' ci/build-ffmpeg.sh)
+          out="vendor/ffmpeg-build/ffmpeg-$v.tar.xz"
+          mkdir -p vendor/ffmpeg-build
+          ok() { [ -f "$out" ] && [ "$(shasum -a 256 "$out" | cut -d' ' -f1)" = "$sha" ]; }
+          curl -fsSL --max-time 120 --retry 2 --retry-all-errors --retry-delay 10 \
+            "https://ffmpeg.org/releases/ffmpeg-$v.tar.xz" -o "$out" || true
+          # ffmpeg.org was unreachable on 2026-11-02: fall back to a fork release's copy of the
+          # same pinned tarball (verified below, and again by build-ffmpeg.sh).
+          ok || curl -fsSL --max-time 300 --retry 3 --retry-all-errors --retry-delay 10 \
+            "https://github.com/dorko87/native-jelly/releases/download/foreground-reclaim-v0.10.0-nightly-20261102-8/ffmpeg-$v.tar.xz" -o "$out"
+          ok || { echo "::error::no FFmpeg $v tarball matching the pinned sha256"; exit 1; }
+
       - name: Build + package
         # No src/config.local.h exists in a clean checkout, so src/app.h's __has_include falls back
         # to the YOUR_PMS_HOST placeholder. That is what makes the CI-built binary the leak-free
