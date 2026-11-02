@@ -1,0 +1,43 @@
+name: Fork build-bench
+
+# FORK-ONLY, not for upstream: the before/after `make build-bench` table AGENTS.md asks of a PR
+# that touches the Makefile, taken on ONE runner in ONE sitting for the PR's base and head.
+# Each table is printed to the job summary and as one notice annotation (fork logs need a sign-in).
+
+on:
+  push:
+    branches: [bench/subtitle-faces]
+
+permissions:
+  contents: read
+
+env:
+  RUST_NIGHTLY: nightly
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/host-rust
+        with:
+          sdl: "true"
+      - name: build-bench on base and head
+        shell: bash
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD~1)
+          base=$(git rev-parse HEAD~2)   # the PR's base: this commit sits on the PR head
+          for label in base head; do
+            sha=$([ "$label" = base ] && echo "$base" || echo "$head")
+            git checkout -q "$sha"
+            echo "== $label $sha"
+            make build-bench ARGS="--json $RUNNER_TEMP/$label.json" 2>&1 | tee "$RUNNER_TEMP/$label.log"
+            table=$(awk '/^\|/' "$RUNNER_TEMP/$label.log")
+            { echo "### $label \`$sha\`"; echo; echo "$table"; echo; } >> "$GITHUB_STEP_SUMMARY"
+            enc=$(printf '%s' "$label $sha"$'\n'"$table" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::notice title=build-bench $label::$enc"
+          done
