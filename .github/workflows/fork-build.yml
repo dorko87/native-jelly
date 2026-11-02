@@ -12,7 +12,7 @@ name: Fork build
 
 on:
   push:
-    branches: [fix/subtitle-script-faces]
+    branches: [fix/subtitle-script-faces, bench/base-build]
   workflow_dispatch:
 
 permissions:
@@ -132,7 +132,8 @@ jobs:
           mkdir -p dist
           src=$(ls raw/com.sostk.nativejelly.nightly_*_arm.ipk)
           version=${src##*/com.sostk.nativejelly.nightly_}; version=${version%_arm.ipk}
-          tag="subtitle-faces-v${version}-nightly-${DATE}-${GITHUB_RUN_NUMBER}"
+          prefix=$([ "$GITHUB_REF_NAME" = bench/base-build ] && echo base-build || echo subtitle-faces)
+          tag="${prefix}-v${version}-nightly-${DATE}-${GITHUB_RUN_NUMBER}"
           ipk="nativejelly-${tag}.ipk"
           cp "$src" "dist/$ipk"
           ( cd dist && sha256sum "$ipk" > "$ipk.sha256" )
@@ -143,7 +144,7 @@ jobs:
             --title "Native Jelly $tag (fork build, no telemetry)" \
             --prerelease \
             --latest=false \
-            --notes "Fork build of $GITHUB_SHA: bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts). Nightly flavour (com.sostk.nativejelly.nightly), RELEASE=1, telemetry compiled out. sha256: $(cut -d' ' -f1 "dist/$ipk.sha256")"
+            --notes "Fork build of $GITHUB_SHA ($GITHUB_REF_NAME). Nightly flavour (com.sostk.nativejelly.nightly), RELEASE=1, telemetry compiled out. sha256: $(cut -d' ' -f1 "dist/$ipk.sha256")"
           {
             echo "### $tag"
             echo "- ipk: $ipk"
