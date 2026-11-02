@@ -12,7 +12,7 @@ name: Fork build
 
 on:
   push:
-    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined]
+    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined, ci/foreground-reclaim]
   workflow_dispatch:
 
 permissions:
@@ -41,6 +41,31 @@ jobs:
         run: |
           set -o pipefail
           make check-cargo-unit-default 2>&1 | tee "$RUNNER_TEMP/make.log" || {
+            # Job logs need a sign-in on a fork; annotations do not.
+            grep -E 'error(\[|:)|FAILED|panicked|failures:|^test .* FAILED|\*\*\*|No such file|not found' "$RUNNER_TEMP/make.log"               | tail -60 | sed 's/^/::error::/'
+            exit 1
+          }
+
+  host-unit-hostsim:
+    name: host unit tests (hostsim)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUST_NIGHTLY: nightly
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/host-rust
+        with:
+          sdl: "true"
+      # The app loop's lifecycle tests (`app::run::lifecycle_regression_tests`) compile only
+      # under `hostsim`.
+      - name: make check-cargo-unit-hostsim
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-cargo-unit-hostsim 2>&1 | tee "$RUNNER_TEMP/make.log" || {
             # Job logs need a sign-in on a fork; annotations do not.
             grep -E 'error(\[|:)|FAILED|panicked|failures:|^test .* FAILED|\*\*\*|No such file|not found' "$RUNNER_TEMP/make.log"               | tail -60 | sed 's/^/::error::/'
             exit 1
@@ -97,7 +122,7 @@ jobs:
 
   build:
     name: ARM build + gates
-    needs: [plan, host-unit-default, host-python, check-ass]
+    needs: [plan, host-unit-default, host-unit-hostsim, host-python, check-ass]
     uses: ./.github/workflows/build-package.yml
     with:
       ref: ${{ github.sha }}
@@ -134,6 +159,7 @@ jobs:
           version=${src##*/com.sostk.nativejelly.nightly_}; version=${version%_arm.ipk}
           case "$GITHUB_REF_NAME" in
             ci/body-length-32bit) what="body-length"; about="a sized body over 4 GiB is not finished at its low 32 bits" ;;
+            ci/foreground-reclaim) what="foreground-reclaim"; about="ci/combined plus reclaim of a parked session after a decoder release or a refused foreground Load" ;;
             ci/combined) what="combined"; about="body-length fix plus bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
             *) what="subtitle-faces"; about="bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
           esac
