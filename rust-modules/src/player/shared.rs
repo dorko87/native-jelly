@@ -608,6 +608,13 @@ pub(crate) struct Shared {
     /// `error_shape` tell a k5lp-style hang apart from an ordinary firmware refusal on the wire,
     /// as `FailureKind::LoadTimeout` rather than the generic `FailureKind::TvPipeline`.
     pub load_timed_out: AtomicBool,
+    /// The pipeline took the video decoder back from an ESTABLISHED session: `type=18 num=600`
+    /// (`"VDEC resource is released by policy action"`) after a picture. Measured upstream
+    /// (PlxNative #756, webOS 4, 2026-10-13): a direct play left paused until the screensaver came
+    /// on got this with NO `LIFECYCLE: background`, and every later Play was refused for good. Set
+    /// on the callback thread, taken once by the app loop ([`super::take_decoder_revoked`]), which
+    /// parks the session exactly as an app switch does and rebuilds it on the viewer's next press.
+    pub decoder_revoked: AtomicBool,
     /// A native start is queued behind the previous object's still-running `Unload`. Written ONLY
     /// by the `PlayerAdapter` after each release-machine step (it publishes the machine's
     /// `has_queued`), never by a session; `state()` derives `Resolving` from it. Not part of
@@ -974,6 +981,7 @@ impl Shared {
             demux_no_video: AtomicBool::new(false),
             load_failed: AtomicBool::new(false),
             load_timed_out: AtomicBool::new(false),
+            decoder_revoked: AtomicBool::new(false),
             start_queued: AtomicBool::new(false),
             load_refusal_num: AtomicI32::new(NO_LOAD_REFUSAL),
             native_audio_header_refused: AtomicBool::new(false),
@@ -1651,6 +1659,7 @@ impl Shared {
         self.demux_no_video.store(false, Ordering::Relaxed);
         self.load_failed.store(false, Ordering::Relaxed);
         self.load_timed_out.store(false, Ordering::Relaxed);
+        self.decoder_revoked.store(false, Ordering::Relaxed);
         self.load_refusal_num.store(NO_LOAD_REFUSAL, Ordering::Relaxed);
         self.native_audio_header_refused.store(false, Ordering::Relaxed);
         // NB: desired_sub_idx is NOT reset here — like desired_audio_idx it persists across
@@ -1689,6 +1698,13 @@ impl Shared {
         self.ended.store(false, Ordering::Relaxed);
         self.pipeline_eos.store(false, Ordering::Relaxed);
         self.hs_ptr.store(std::ptr::null_mut(), Ordering::Release);
+    }
+
+    /// Whether the native clock is held for the VIEWER's pause, which fences the start's first
+    /// Play behind a prime (`reserve_hls_prime_play`).
+    #[cfg(all(test, feature = "hostsim"))]
+    pub(crate) fn clock_user_held_for_test(&self) -> bool {
+        self.hls_clock.lock().unwrap_or_else(|e| e.into_inner()).user_held
     }
 
     /// Start (or restart after a rung commit) the proof for the media that will release this hold.
