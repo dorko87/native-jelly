@@ -12,6 +12,12 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
+/// Largest playlist body the media worker reads. Jellyfin's VOD media playlist lists the whole
+/// film, and every child repeats the full request query (~0.9 KB with the codec and range-type
+/// lists): a 51-minute film at 2 s segments is ~1.4 MB, a 4-hour one ~6.8 MB. It is fetched once
+/// (ENDLIST stops the refresh), so the cap only bounds a hostile or broken answer.
+pub(crate) const MAX_PLAYLIST_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Resource {
     pub(crate) origin: Origin,
@@ -1348,6 +1354,36 @@ mod tests {
         assert_eq!((media.segments.len(), media.end_list, media.start_offset_micros), (4, true, None));
         assert_eq!(media.playlist_type, Some(PlaylistType::Vod));
         assert!(media.segments[2].resource.path.starts_with("/videos/0000-item/hls1/main/2.ts?"));
+    }
+
+    /// A whole film's Jellyfin media playlist, each child carrying the full request query (the
+    /// query the TV sent a 12.4 server for a 3050 s film at `SegmentLength=2`, ids synthetic). It is
+    /// over the old 1 MiB cap and must fit [`MAX_PLAYLIST_BYTES`], as must a 4-hour film.
+    #[test]
+    fn a_full_length_jellyfin_media_playlist_fits_the_size_cap() {
+        const QUERY: &str = "DeviceId=00000000000000000000000000000000&MediaSourceId=00000000000000000000000000000000&VideoCodec=h264,hevc&AudioCodec=ac3,eac3,aac&AudioStreamIndex=2&VideoBitrate=336000&AudioBitrate=384000&MaxFramerate=23.976025&MaxWidth=854&MaxHeight=480&SegmentContainer=ts&SegmentLength=2&MinSegments=1&PlaySessionId=00000000000000000000000000000000&ApiKey=00000000000000000000000000000000&RequireAvc=false&EnableAudioVbrEncoding=true&Tag=00000000000000000000000000000000&SubtitleMethod=Encode&hevc-level=150&hevc-videobitdepth=10&hevc-profile=main10&h264-rangetype=SDR&hevc-rangetype=SDR,HDR10,HDR10Plus,DOVIWithEL,DOVIWithELHDR10Plus,HLG,DOVI,DOVIWithSDR,DOVIWithHDR10,DOVIWithHDR10Plus,DOVIWithHLG&h264-videobitdepth=10&eac3-audiochannels=8&ac3-audiochannels=6&aac-audiochannels=6&TranscodeReasons=ContainerBitrateExceedsLimit&allowVideoStreamCopy=false";
+        let film = |seconds: u64| {
+            let mut text = String::from(
+                "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n",
+            );
+            for n in 0..seconds / 2 {
+                text.push_str(&format!(
+                    "#EXTINF:2.000000, nodesc\nhls1/main/{n}.ts?{QUERY}&runtimeTicks={}&actualSegmentLengthTicks=20000000\n",
+                    n * 20_000_000
+                ));
+            }
+            text.push_str("#EXT-X-ENDLIST\n");
+            text
+        };
+        let base = source(&format!("/videos/0000-item/main.m3u8?{QUERY}"));
+
+        let observed = film(3050);
+        assert!(observed.len() > 1024 * 1024, "the observed film is over the old cap");
+        assert!(observed.len() <= MAX_PLAYLIST_BYTES);
+        let media = parse_media(&base, &observed).unwrap();
+        assert_eq!((media.segments.len(), media.end_list), (1525, true));
+
+        assert!(film(4 * 3600).len() <= MAX_PLAYLIST_BYTES, "a 4-hour film fits");
     }
 
     /// With no `EXT-X-START` the caller names the time: playback starts on the segment covering it,
