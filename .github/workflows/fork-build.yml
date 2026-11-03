@@ -12,7 +12,7 @@ name: Fork build
 
 on:
   push:
-    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined, ci/foreground-reclaim, ci/subtitle-fixes, ci/hls-trickplay]
+    branches: [fix/subtitle-script-faces, ci/body-length-32bit, ci/combined, ci/foreground-reclaim, ci/subtitle-fixes, ci/hls-trickplay, ci/hls-abr-pause]
   workflow_dispatch:
 
 permissions:
@@ -214,6 +214,7 @@ jobs:
             ci/foreground-reclaim) what="foreground-reclaim"; about="ci/combined plus reclaim of a parked session after a decoder release or a refused foreground Load" ;;
             ci/subtitle-fixes) what="subtitle-fixes"; about="ci/foreground-reclaim plus five PlxNative subtitle fixes (HDR dimming, Huge size, caption rise, retry keeps subtitles, NUL-terminated ASS)" ;;
             ci/hls-trickplay) what="hls-trickplay"; about="ci/subtitle-fixes plus Jellyfin HLS fixes for quality Auto (trickplay image streams, 16 MiB playlist cap, AAC audio)" ;;
+            ci/hls-abr-pause) what="hls-abr-pause"; about="ci/hls-trickplay plus keeping playback when a Pause supersedes an Auto quality step (the candidate is discarded)" ;;
             ci/combined) what="combined"; about="body-length fix plus bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
             *) what="subtitle-faces"; about="bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
           esac
