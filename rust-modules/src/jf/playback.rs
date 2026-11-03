@@ -337,12 +337,13 @@ pub(crate) fn device_profile(caps: &crate::catalog::capabilities::Capabilities, 
     let target_audio = if target_audio.is_empty() { "aac".to_string() } else { target_audio.join(",") };
     let transcoding = match (ask.forced, ask.hls) {
         (true, _) => Vec::new(),
-        // MPEG-TS segments: the player's HLS cursor demuxes nothing else.
+        // MPEG-TS segments: the player's HLS cursor demuxes nothing else. Its audio must be AAC
+        // (`ff::hls_demux_segment`); offered E-AC-3, the server copies it and the cursor fails.
         (false, Some(secs)) => vec![json!({
             "Container": "ts",
             "Type": "Video",
             "VideoCodec": hls_target_video,
-            "AudioCodec": target_audio,
+            "AudioCodec": "aac",
             "Protocol": "hls",
             "Context": "Streaming",
             "SegmentLength": secs,
@@ -1364,7 +1365,7 @@ mod tests {
         assert_eq!(t["MinSegments"], 1);
         assert_eq!(t["Context"], "Streaming");
         assert_eq!(t["VideoCodec"], "h264,hevc");
-        assert_eq!(t["AudioCodec"], "ac3,eac3,aac,dts");
+        assert_eq!(t["AudioCodec"], "aac", "the HLS cursor demuxes only AAC audio");
     }
 
     #[test]
