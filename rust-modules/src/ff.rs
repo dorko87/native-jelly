@@ -4512,7 +4512,6 @@ fn hls_fetch_text(
     net: &mut HlsNet,
     mut reserve: Option<&mut ReserveDeadlineState>,
 ) -> Result<(String, u128, crate::hls::Resource), HlsExit> {
-    const MAX_PLAYLIST_BYTES: usize = 1024 * 1024;
     let request_path = auth
         .request_path(resource)
         .map_err(|_| HlsExit::Failed("playlist credential rejected"))?;
@@ -4561,7 +4560,7 @@ fn hls_fetch_text(
             Err(error) => return Err(error),
         }
     };
-    if size > MAX_PLAYLIST_BYTES as i64 {
+    if size > crate::hls::MAX_PLAYLIST_BYTES as i64 {
         return Err(HlsExit::Failed("playlist exceeds size cap"));
     }
     let mut body = Vec::with_capacity(if size > 0 { size as usize } else { 4096 });
@@ -4598,7 +4597,7 @@ fn hls_fetch_text(
             break;
         }
         watchdog.reset();
-        if body.len().saturating_add(n) > MAX_PLAYLIST_BYTES {
+        if body.len().saturating_add(n) > crate::hls::MAX_PLAYLIST_BYTES {
             return Err(HlsExit::Failed("playlist exceeds size cap"));
         }
         body.extend_from_slice(&chunk[..n]);
