@@ -1766,6 +1766,16 @@ impl Shared {
         self.reset_hls_clock();
     }
 
+    /// A viewer Pause the native pipeline accepted, through the same reserve/complete protocol the
+    /// engine runs, for tests outside this module that cannot name its result types.
+    #[cfg(test)]
+    pub(crate) fn accept_hls_user_pause_for_test(&self) {
+        let Some(HlsUserPause::Issue(token)) = self.prepare_hls_user_pause() else {
+            panic!("a running clock reserves a native user Pause");
+        };
+        assert_eq!(self.complete_hls_user_pause(token, true), HlsPauseCompletion::Accepted);
+    }
+
     /// Put a newly constructed native pipeline into its real pre-Play state. This happens before
     /// either worker is spawned, so neither an ABR trial nor a user command can mistake "loaded but
     /// not started" for a running clock. `user_held` is the durable viewer intent carried across an

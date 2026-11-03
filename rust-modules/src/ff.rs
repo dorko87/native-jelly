@@ -6180,19 +6180,34 @@ struct HlsCandidateTransition {
     generation: u64,
 }
 
+/// How a validated candidate leaves the publication fence when arming it does not end playback.
+///
+/// `Superseded` is not a failure of the media pipeline: a user Pause/Play (or another clock edge)
+/// won the clock mutex while the candidate's private I/O ran, so its lease no longer authorizes
+/// publication. Nothing has been fed and the fence was never armed, so the candidate is simply
+/// discarded and the old cursor keeps playing. Treating it as fatal turned an ordinary Pause during
+/// an upshift warm-up into the error readout (device, 2026-11-03).
+enum HlsCandidateArm {
+    Armed(HlsCandidateTransition),
+    Superseded,
+}
+
 impl HlsCandidateTransition {
-    fn arm(automatic_token: u64) -> Result<Self, HlsExit> {
+    fn arm(automatic_token: u64) -> Result<HlsCandidateArm, HlsExit> {
         Self::arm_for(Some(automatic_token))
     }
 
     #[cfg(test)]
     fn arm_unowned_for_test() -> Result<Self, HlsExit> {
-        Self::arm_for(None)
+        match Self::arm_for(None)? {
+            HlsCandidateArm::Armed(transition) => Ok(transition),
+            HlsCandidateArm::Superseded => unreachable!("an unowned transition has no lease"),
+        }
     }
 
-    fn arm_for(automatic_token: Option<u64>) -> Result<Self, HlsExit> {
+    fn arm_for(automatic_token: Option<u64>) -> Result<HlsCandidateArm, HlsExit> {
         match SHARED.begin_hls_candidate_transition(automatic_token) {
-            Ok(generation) => Ok(Self { generation }),
+            Ok(generation) => Ok(HlsCandidateArm::Armed(Self { generation })),
             Err(crate::player::HlsClockFenceError::Stopping) => Err(HlsExit::Aborted),
             Err(crate::player::HlsClockFenceError::Overlap) => {
                 Err(HlsExit::Failed("overlapping HLS candidate publication"))
@@ -6200,9 +6215,7 @@ impl HlsCandidateTransition {
             Err(crate::player::HlsClockFenceError::Exhausted) => {
                 Err(HlsExit::Failed("HLS candidate generation exhausted"))
             }
-            Err(crate::player::HlsClockFenceError::Superseded) => Err(HlsExit::Failed(
-                "HLS candidate automatic lease was superseded",
-            )),
+            Err(crate::player::HlsClockFenceError::Superseded) => Ok(HlsCandidateArm::Superseded),
         }
     }
 
@@ -8306,7 +8319,27 @@ fn hls_demux(
                 .or_else(|| _automatic_lease.as_ref().map(HlsAutomaticLease::token))
                 .expect("every HLS candidate transaction owns one automatic actuator lease");
             candidate_transition = match HlsCandidateTransition::arm(automatic_token) {
-                Ok(transition) => Some(transition),
+                Ok(HlsCandidateArm::Armed(transition)) => Some(transition),
+                Ok(HlsCandidateArm::Superseded) => {
+                    // The viewer took the clock while the candidate warmed up. No candidate AU has
+                    // been queued and `timeline` is still the old cursor's, so this is the same
+                    // discard as a rejected verdict: the route, controller rung and cursor stay old.
+                    control.abandon(&primed.encoder_session);
+                    reject_hls_abr_after_transaction(
+                        controller,
+                        proposal,
+                        crate::abr::RejectCause::Circumstance,
+                        &mut tx,
+                        now_ms(),
+                    );
+                    crate::player::log(&format!(
+                        "abr: candidate lease superseded by a clock transition; discarded {} \
+                         staged segment(s) without changing the active media owner",
+                        candidate_outputs.len(),
+                    ));
+                    tx.finish("superseded_discarded");
+                    continue;
+                }
                 Err(error) => {
                     control.abandon(&primed.encoder_session);
                     tx.finish("publication_overlap");

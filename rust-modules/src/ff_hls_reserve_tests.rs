@@ -328,6 +328,74 @@ fn unwind_after_candidate_media_publication_stays_fenced_until_teardown() {
     );
 }
 
+/// Device regression, 2026-11-03 (LG C3, Jellyfin, quality Auto): ABR explored 4000->16000 kbps
+/// and the viewer pressed Pause while the candidate warmed up. The lease check rightly refused
+/// publication, but the candidate loop turned that refusal into a fatal demux exit (`HLS candidate
+/// automatic lease was superseded`, `outcome=publication_overlap`) and playback ended in the error
+/// readout. A superseded lease is a discard: the fence stays stable, so the old cursor plays on.
+#[test]
+fn a_user_pause_during_candidate_warmup_discards_the_candidate_and_keeps_playing() {
+    let _guard = nj_base::testlock::serial();
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SHARED.reset_hls_clock_for_test();
+            SHARED
+                .hls_rebuffer_requested
+                .store(self.0, std::sync::atomic::Ordering::Release);
+        }
+    }
+    let _restore = Restore(
+        SHARED
+            .hls_rebuffer_requested
+            .swap(false, std::sync::atomic::Ordering::AcqRel),
+    );
+    let generation = || {
+        SHARED
+            .hls_candidate_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    };
+
+    // Upshift exploration: the trial reserve is the candidate's lease.
+    SHARED.reset_hls_clock_for_test();
+    let stable = generation();
+    assert_eq!(stable & 1, 0, "test starts outside a transition");
+    let trial = HlsTrialReserve::arm(3_000, SHARED.hls_user_sequence())
+        .expect("running playback grants the upshift trial");
+    SHARED.accept_hls_user_pause_for_test();
+    assert!(
+        matches!(
+            HlsCandidateTransition::arm(trial.token()),
+            Ok(HlsCandidateArm::Superseded)
+        ),
+        "a Pause during warm-up must discard the candidate, not end playback",
+    );
+    assert_eq!(generation(), stable, "a discarded candidate never fences the old cursor's clock");
+    drop(trial);
+    assert_eq!(
+        SHARED
+            .hls_trial_reserve_ms
+            .load(std::sync::atomic::Ordering::Acquire),
+        -1,
+        "the discarded trial releases its reserve for the next exploration",
+    );
+
+    // Recovery downshift: the automatic lease takes the same discard.
+    SHARED.reset_hls_clock_for_test();
+    let stable = generation();
+    let lease = HlsAutomaticLease::begin(
+        crate::player::HlsAutomaticTransition::QualityDown,
+        SHARED.hls_user_sequence(),
+    )
+    .expect("running playback grants the downshift lease");
+    SHARED.accept_hls_user_pause_for_test();
+    assert!(matches!(
+        HlsCandidateTransition::arm(lease.token()),
+        Ok(HlsCandidateArm::Superseded)
+    ));
+    assert_eq!(generation(), stable);
+}
+
 #[test]
 fn a_floor_deadline_can_only_promote_while_the_fetch_is_in_flight() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
