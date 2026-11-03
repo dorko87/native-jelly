@@ -213,7 +213,7 @@ jobs:
             ci/body-length-32bit) what="body-length"; about="a sized body over 4 GiB is not finished at its low 32 bits" ;;
             ci/foreground-reclaim) what="foreground-reclaim"; about="ci/combined plus reclaim of a parked session after a decoder release or a refused foreground Load" ;;
             ci/subtitle-fixes) what="subtitle-fixes"; about="ci/foreground-reclaim plus five PlxNative subtitle fixes (HDR dimming, Huge size, caption rise, retry keeps subtitles, NUL-terminated ASS)" ;;
-            ci/hls-trickplay) what="hls-trickplay"; about="ci/subtitle-fixes plus skipping Jellyfin trickplay image streams in the HLS master (quality Auto)" ;;
+            ci/hls-trickplay) what="hls-trickplay"; about="ci/subtitle-fixes plus Jellyfin HLS fixes for quality Auto (trickplay image streams, 16 MiB playlist cap)" ;;
             ci/combined) what="combined"; about="body-length fix plus bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
             *) what="subtitle-faces"; about="bundled Noto Sans Bold subtitle faces (Hebrew and 21 other scripts)" ;;
           esac
